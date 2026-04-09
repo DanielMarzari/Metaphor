@@ -1,23 +1,121 @@
 'use client';
 
-import { useState, useEffect, useCallback, use } from 'react';
+import { useState, useEffect, useCallback, use, useRef } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Plus, X, Tag, MessageSquare, Save, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, Check } from 'lucide-react';
 
 interface Verse {
   id: number; book_id: number; chapter: number; verse: number;
   original_text: string; language: string; abbreviation: string; book_name: string;
 }
 
+interface Word {
+  id: number; verse_id: number; word_order: number; text: string;
+  lemma: string; morph: string;
+  segments: { text: string; lemma: string; morph: string }[];
+}
+
 interface Annotation {
   id: number; verse_id: number; metaphor_id: number; metaphor_name: string;
   source_domain: string; target_domain: string; notes: string;
   confidence: string; linguistic_evidence: string; metaphor_category: string;
+  word_ids: number[];
 }
 
 interface Metaphor {
   id: number; name: string; description: string; category: string; usage_count: number;
 }
+
+// --- Morph decoder (client-side, mirrors server lib/morph.ts) ---
+
+const HEB_VERB_STEM: Record<string, string> = {
+  q: 'Qal', N: 'Niphal', p: 'Piel', P: 'Pual', h: 'Hiphil',
+  H: 'Hophal', t: 'Hithpael', o: 'Polel', O: 'Polal', r: 'Hithpolel',
+  m: 'Poel', M: 'Poal', k: 'Palel', K: 'Pulal', Q: 'Qal Passive',
+  l: 'Pilpel', L: 'Polpal', f: 'Hithpalpel', D: 'Nithpael',
+};
+const HEB_VERB_TYPE: Record<string, string> = {
+  p: 'Perf', q: 'Seq Perf', i: 'Impf', w: 'Seq Impf',
+  h: 'Cohort', j: 'Juss', v: 'Impv',
+  r: 'Ptcp Act', s: 'Ptcp Pass', a: 'Inf Abs', c: 'Inf Cst',
+};
+const HEB_PERSON: Record<string, string> = { '1': '1st', '2': '2nd', '3': '3rd' };
+const HEB_GENDER: Record<string, string> = { m: 'Masc', f: 'Fem', c: 'Com', b: 'Both' };
+const HEB_NUMBER: Record<string, string> = { s: 'Sg', p: 'Pl', d: 'Du' };
+const HEB_STATE: Record<string, string> = { a: 'Abs', c: 'Cst', d: 'Det' };
+const HEB_NOUN_TYPE: Record<string, string> = { c: 'Common', p: 'Proper' };
+const HEB_PARTICLE_TYPE: Record<string, string> = {
+  a: 'Affirm', d: 'Article', e: 'Exhort', i: 'Interrog',
+  j: 'Interj', m: 'Demonstr', n: 'Neg', o: 'Obj Marker', r: 'Relative',
+};
+const HEB_POS_SHORT: Record<string, string> = {
+  A: 'Adj', C: 'Conj', D: 'Adv', N: 'Noun', P: 'Pron', R: 'Prep', S: 'Suf', T: 'Part', V: 'Verb',
+};
+const HEB_PRONOUN_TYPE: Record<string, string> = { d: 'Dem', f: 'Indef', i: 'Interrog', p: 'Pers', r: 'Rel' };
+const HEB_SUFFIX_TYPE: Record<string, string> = { d: 'Dir He', h: 'Parag He', n: 'Parag Nun', p: 'Pronom' };
+
+function decodeHebrew(morph: string): string {
+  if (!morph) return '';
+  let code = morph;
+  let lang = '';
+  if (code.startsWith('H')) code = code.slice(1);
+  else if (code.startsWith('A')) { lang = 'Aram '; code = code.slice(1); }
+  const pos = code[0];
+  const rest = code.slice(1);
+  if (pos === 'V') {
+    return [lang + 'Verb', HEB_VERB_STEM[rest[0]] || rest[0], HEB_VERB_TYPE[rest[1]] || rest[1],
+      HEB_PERSON[rest[2]] || '', HEB_GENDER[rest[3]] || '', HEB_NUMBER[rest[4]] || ''].filter(Boolean).join(' ');
+  }
+  if (pos === 'N') {
+    return [lang + 'Noun', HEB_NOUN_TYPE[rest[0]] || '', HEB_GENDER[rest[1]] || '',
+      HEB_NUMBER[rest[2]] || '', HEB_STATE[rest[3]] || ''].filter(Boolean).join(' ');
+  }
+  if (pos === 'T') return [lang + 'Part', HEB_PARTICLE_TYPE[rest[0]] || ''].filter(Boolean).join(' ');
+  if (pos === 'P') return [lang + 'Pron', HEB_PRONOUN_TYPE[rest[0]] || '', HEB_PERSON[rest[1]] || '',
+    HEB_GENDER[rest[2]] || '', HEB_NUMBER[rest[3]] || ''].filter(Boolean).join(' ');
+  if (pos === 'S') return [lang + 'Suf', HEB_SUFFIX_TYPE[rest[0]] || '', HEB_PERSON[rest[1]] || '',
+    HEB_GENDER[rest[2]] || '', HEB_NUMBER[rest[3]] || ''].filter(Boolean).join(' ');
+  if (pos === 'A') return [lang + 'Adj', HEB_GENDER[rest[1]] || '', HEB_NUMBER[rest[2]] || '',
+    HEB_STATE[rest[3]] || ''].filter(Boolean).join(' ');
+  return lang + (HEB_POS_SHORT[pos] || morph);
+}
+
+const GK_POS: Record<string, string> = {
+  'N-': 'Noun', 'V-': 'Verb', 'RA': 'Art', 'C-': 'Conj', 'RP': 'Pers Pron',
+  'RR': 'Rel Pron', 'RD': 'Dem Pron', 'RI': 'Interrog Pron', 'RX': 'Indef Pron',
+  'A-': 'Adj', 'D-': 'Adv', 'P-': 'Prep', 'X-': 'Part', 'I-': 'Interj',
+};
+const GK_TENSE: Record<string, string> = { P: 'Pres', I: 'Impf', F: 'Fut', A: 'Aor', X: 'Perf', Y: 'Plupf' };
+const GK_VOICE: Record<string, string> = { A: 'Act', M: 'Mid', P: 'Pass' };
+const GK_MOOD: Record<string, string> = { I: 'Ind', D: 'Impv', S: 'Subj', O: 'Opt', N: 'Inf', P: 'Ptcp' };
+const GK_CASE: Record<string, string> = { N: 'Nom', G: 'Gen', D: 'Dat', A: 'Acc', V: 'Voc' };
+const GK_NUMBER_MAP: Record<string, string> = { S: 'Sg', P: 'Pl' };
+const GK_GENDER_MAP: Record<string, string> = { M: 'Masc', F: 'Fem', N: 'Neut' };
+
+function decodeGreek(morph: string): string {
+  if (!morph) return '';
+  const [pos, parsing] = morph.split('|');
+  const posName = GK_POS[pos] || pos;
+  if (pos === 'V-' && parsing) {
+    const mood = GK_MOOD[parsing[3]] || '';
+    if (mood === 'Ptcp') return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood,
+      GK_CASE[parsing[4]] || '', GK_NUMBER_MAP[parsing[5]] || '', GK_GENDER_MAP[parsing[6]] || ''].filter(Boolean).join(' ');
+    if (mood === 'Inf') return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood].filter(Boolean).join(' ');
+    return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood,
+      HEB_PERSON[parsing[0]] || '', GK_NUMBER_MAP[parsing[5]] || ''].filter(Boolean).join(' ');
+  }
+  if (parsing) {
+    return [posName, GK_CASE[parsing[4]] || '', GK_NUMBER_MAP[parsing[5]] || '',
+      GK_GENDER_MAP[parsing[6]] || ''].filter(Boolean).join(' ');
+  }
+  return posName;
+}
+
+function decodeMorph(morph: string, language: string): string {
+  return language === 'hebrew' ? decodeHebrew(morph) : decodeGreek(morph);
+}
+
+// --- Component ---
 
 export default function ChapterPage({ params }: { params: Promise<{ book: string; chapter: string }> }) {
   const { book: bookAbbr, chapter: chapterStr } = use(params);
@@ -25,10 +123,18 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
   const [bookInfo, setBookInfo] = useState<any>(null);
   const [verses, setVerses] = useState<Verse[]>([]);
+  const [wordsByVerse, setWordsByVerse] = useState<Map<number, Word[]>>(new Map());
   const [annotations, setAnnotations] = useState<Map<number, Annotation[]>>(new Map());
   const [activeVerse, setActiveVerse] = useState<Verse | null>(null);
   const [metaphors, setMetaphors] = useState<Metaphor[]>([]);
   const [showPanel, setShowPanel] = useState(false);
+
+  // Word selection
+  const [selectedWordIds, setSelectedWordIds] = useState<Set<number>>(new Set());
+  const [selectingWords, setSelectingWords] = useState(false);
+
+  // Parsing popup
+  const [popupWord, setPopupWord] = useState<{ word: Word; x: number; y: number } | null>(null);
 
   // Annotation form state
   const [selectedMetaphor, setSelectedMetaphor] = useState<number | null>(null);
@@ -53,9 +159,27 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
   async function loadVerses(bookId: number, ch: number) {
     const res = await fetch(`/api/verses?book_id=${bookId}&chapter=${ch}`);
-    const data = await res.json();
+    const data: Verse[] = await res.json();
     setVerses(data);
-    // Load annotations for all verses
+
+    // Load words for all verses in one batch
+    const verseIds = data.map(v => v.id);
+    if (verseIds.length > 0) {
+      const wRes = await fetch(`/api/words?verse_ids=${verseIds.join(',')}`);
+      const allWords: Word[] = await wRes.json();
+      // Parse segments JSON
+      for (const w of allWords) {
+        if (typeof w.segments === 'string') w.segments = JSON.parse(w.segments);
+      }
+      const wMap = new Map<number, Word[]>();
+      for (const w of allWords) {
+        if (!wMap.has(w.verse_id)) wMap.set(w.verse_id, []);
+        wMap.get(w.verse_id)!.push(w);
+      }
+      setWordsByVerse(wMap);
+    }
+
+    // Load annotations
     const annotMap = new Map<number, Annotation[]>();
     for (const v of data) {
       const aRes = await fetch(`/api/verse-metaphors?verse_id=${v.id}`);
@@ -68,6 +192,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   function openAnnotatePanel(verse: Verse, annotation?: Annotation) {
     setActiveVerse(verse);
     setShowPanel(true);
+    setSelectingWords(true);
+    setPopupWord(null);
     if (annotation) {
       setEditingAnnotation(annotation);
       setSelectedMetaphor(annotation.metaphor_id);
@@ -76,6 +202,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setNotes(annotation.notes || '');
       setConfidence(annotation.confidence);
       setLinguisticEvidence(annotation.linguistic_evidence || '');
+      setSelectedWordIds(new Set(annotation.word_ids || []));
     } else {
       resetForm();
     }
@@ -90,12 +217,33 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setNotes('');
     setConfidence('draft');
     setLinguisticEvidence('');
+    setSelectedWordIds(new Set());
   }
 
   function closePanel() {
     setShowPanel(false);
     setActiveVerse(null);
+    setSelectingWords(false);
     resetForm();
+  }
+
+  function toggleWordSelection(wordId: number) {
+    setSelectedWordIds(prev => {
+      const next = new Set(prev);
+      if (next.has(wordId)) next.delete(wordId);
+      else next.add(wordId);
+      return next;
+    });
+  }
+
+  function handleWordClick(word: Word, e: React.MouseEvent) {
+    if (selectingWords && activeVerse && word.verse_id === activeVerse.id) {
+      toggleWordSelection(word.id);
+    } else {
+      // Show parsing popup
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      setPopupWord({ word, x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+    }
   }
 
   async function handleSave() {
@@ -103,7 +251,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
     let metaphorId = selectedMetaphor;
 
-    // Create new metaphor if needed
     if (!metaphorId && newMetaphorName.trim()) {
       const res = await fetch('/api/metaphors', {
         method: 'POST',
@@ -113,7 +260,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       if (!res.ok) { alert('Failed to create metaphor'); return; }
       const data = await res.json();
       metaphorId = data.id;
-      // Refresh metaphors list
       const mRes = await fetch('/api/metaphors');
       setMetaphors(await mRes.json());
     }
@@ -128,6 +274,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       notes: notes || undefined,
       confidence,
       linguistic_evidence: linguisticEvidence || undefined,
+      word_ids: Array.from(selectedWordIds),
     };
 
     if (editingAnnotation) {
@@ -144,7 +291,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       });
     }
 
-    // Reload annotations for this verse
     const aRes = await fetch(`/api/verse-metaphors?verse_id=${activeVerse.id}`);
     const aData = await aRes.json();
     setAnnotations(prev => new Map(prev).set(activeVerse.id, aData));
@@ -164,11 +310,32 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     });
   }
 
+  // Close parsing popup when clicking outside
+  useEffect(() => {
+    function handleClick() { setPopupWord(null); }
+    if (popupWord) {
+      document.addEventListener('click', handleClick);
+      return () => document.removeEventListener('click', handleClick);
+    }
+  }, [popupWord]);
+
   if (!bookInfo) return <div className="min-h-screen flex items-center justify-center" style={{ color: 'var(--muted)' }}>Loading...</div>;
 
   const isHebrew = bookInfo.language === 'hebrew';
   const prevChapter = chapter > 1 ? chapter - 1 : null;
   const nextChapter = chapter < bookInfo.chapter_count ? chapter + 1 : null;
+
+  // Collect all highlighted word IDs from annotations for this verse
+  function getHighlightedWordIds(verseId: number): Map<number, string> {
+    const map = new Map<number, string>();
+    const annots = annotations.get(verseId) || [];
+    for (const a of annots) {
+      for (const wid of (a.word_ids || [])) {
+        map.set(wid, a.confidence);
+      }
+    }
+    return map;
+  }
 
   return (
     <div className="min-h-screen">
@@ -200,13 +367,53 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
         <div className="space-y-4">
           {verses.map(verse => {
             const verseAnnotations = annotations.get(verse.id) || [];
+            const words = wordsByVerse.get(verse.id) || [];
+            const highlightMap = getHighlightedWordIds(verse.id);
+            const isActive = activeVerse?.id === verse.id;
+
             return (
-              <div key={verse.id} className="group rounded-lg p-4 border transition-all hover:shadow-sm"
-                style={{ backgroundColor: 'var(--verse-bg)', borderColor: 'var(--border)' }}>
-                {/* Verse text */}
+              <div key={verse.id}
+                className={`group rounded-lg p-4 border transition-all hover:shadow-sm ${isActive ? 'ring-2' : ''}`}
+                style={{
+                  backgroundColor: 'var(--verse-bg)',
+                  borderColor: 'var(--border)',
+                  ringColor: isActive ? 'var(--primary)' : undefined,
+                }}>
+                {/* Verse text with individual words */}
                 <div className={isHebrew ? 'hebrew-text' : 'greek-text'}>
                   <span className="verse-number">{verse.verse}</span>
-                  {verse.original_text}
+                  {words.length > 0 ? (
+                    words.map(word => {
+                      const isSelected = selectingWords && isActive && selectedWordIds.has(word.id);
+                      const highlightConf = highlightMap.get(word.id);
+                      return (
+                        <span
+                          key={word.id}
+                          onClick={(e) => { e.stopPropagation(); handleWordClick(word, e); }}
+                          className="word-token"
+                          style={{
+                            cursor: (selectingWords && isActive) ? 'pointer' : 'help',
+                            borderRadius: '3px',
+                            padding: '1px 2px',
+                            margin: '0 1px',
+                            display: 'inline',
+                            transition: 'all 0.15s',
+                            backgroundColor: isSelected
+                              ? 'color-mix(in srgb, var(--primary) 25%, transparent)'
+                              : highlightConf
+                                ? `color-mix(in srgb, var(--${highlightConf}) 12%, transparent)`
+                                : 'transparent',
+                            outline: isSelected ? '2px solid var(--primary)' : 'none',
+                            textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
+                            textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
+                            textUnderlineOffset: '4px',
+                          }}
+                        >{word.text} </span>
+                      );
+                    })
+                  ) : (
+                    <span>{verse.original_text}</span>
+                  )}
                 </div>
 
                 {/* Annotations */}
@@ -222,6 +429,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                         }}>
                         <Tag className="w-3 h-3" />
                         {a.metaphor_name}
+                        {a.word_ids?.length > 0 && (
+                          <span className="opacity-60">({a.word_ids.length}w)</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -241,6 +451,45 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
         </div>
       </main>
 
+      {/* Parsing popup */}
+      {popupWord && (
+        <div
+          className="fixed z-[60] rounded-lg shadow-xl border p-3 max-w-xs"
+          style={{
+            left: `${Math.min(popupWord.x, window.innerWidth - 300)}px`,
+            top: `${popupWord.y}px`,
+            backgroundColor: 'var(--surface)',
+            borderColor: 'var(--border)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={`text-lg mb-2 font-semibold ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
+            style={{ fontSize: '1.3rem' }}>
+            {popupWord.word.text}
+          </div>
+          {popupWord.word.segments.map((seg, i) => (
+            <div key={i} className="mb-1.5 last:mb-0">
+              <div className="flex items-baseline gap-2">
+                <span className={`font-medium ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
+                  style={{ fontSize: '1rem' }}>
+                  {seg.text}
+                </span>
+                <span className="text-xs px-1.5 py-0.5 rounded" style={{
+                  backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
+                }}>
+                  {decodeMorph(seg.morph, bookInfo.language)}
+                </span>
+              </div>
+              {seg.lemma && (
+                <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                  Lemma: {seg.lemma}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Annotation Panel (slide-out) */}
       {showPanel && activeVerse && (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -257,10 +506,43 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               {/* Verse reference */}
               <div className="p-3 rounded-lg text-sm" style={{ backgroundColor: 'var(--surface-2)' }}>
                 <span className="font-medium">{activeVerse.book_name} {activeVerse.chapter}:{activeVerse.verse}</span>
-                <div className={`mt-2 text-xs ${isHebrew ? 'hebrew-text' : 'greek-text'}`} style={{ fontSize: '0.95rem', lineHeight: '1.8' }}>
-                  {activeVerse.original_text}
+                <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
+                  Click words in the verse to select them for this annotation
                 </div>
               </div>
+
+              {/* Selected words display */}
+              {selectedWordIds.size > 0 && (
+                <div>
+                  <label className="block text-xs font-medium mb-2" style={{ color: 'var(--muted)' }}>
+                    Selected Words ({selectedWordIds.size})
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(() => {
+                      const verseWords = wordsByVerse.get(activeVerse.id) || [];
+                      return verseWords
+                        .filter(w => selectedWordIds.has(w.id))
+                        .map(w => (
+                          <span key={w.id}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm border cursor-pointer hover:opacity-70"
+                            style={{
+                              backgroundColor: 'color-mix(in srgb, var(--primary) 10%, transparent)',
+                              borderColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+                              color: 'var(--primary)',
+                            }}
+                            onClick={() => toggleWordSelection(w.id)}
+                          >
+                            <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>
+                              {w.text}
+                            </span>
+                            <span className="text-[10px] opacity-60">{decodeMorph(w.morph, bookInfo.language)}</span>
+                            <X className="w-3 h-3 opacity-50" />
+                          </span>
+                        ));
+                    })()}
+                  </div>
+                </div>
+              )}
 
               {/* Metaphor selection */}
               <div>

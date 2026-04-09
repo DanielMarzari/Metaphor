@@ -1,6 +1,6 @@
 /**
  * Seed script: Downloads Hebrew (WLC) and Greek (SBLGNT) Bible texts
- * and populates the metaphor.db SQLite database.
+ * and populates the metaphor.db SQLite database with word-level data.
  *
  * Usage: npm run seed   (or: npx tsx scripts/seed.ts)
  */
@@ -32,11 +32,6 @@ async function download(url: string, dest: string): Promise<void> {
   console.log(`  [downloaded] ${path.basename(dest)}`);
 }
 
-function stripAccents(text: string): string {
-  // Remove Hebrew cantillation marks (U+0591-U+05AF) but keep vowels (U+05B0-U+05BD, U+05BF, U+05C1-U+05C2, U+05C4-U+05C5, U+05C7)
-  return text.replace(/[\u0591-\u05AF]/g, '');
-}
-
 // --- Phase A: Download raw data ---
 
 async function downloadWLC() {
@@ -52,7 +47,6 @@ async function downloadWLC() {
 async function downloadSBLGNT() {
   console.log('\n=== Downloading SBLGNT Greek texts ===');
   const ntBooks = BOOKS.filter(b => b.sblgntBook);
-  // Get the SBLGNT filenames from the repository listing
   const fileMap: Record<string, string> = {
     '61': '61-Mt-morphgnt.txt',  '62': '62-Mk-morphgnt.txt',
     '63': '63-Lk-morphgnt.txt',  '64': '64-Jn-morphgnt.txt',
@@ -79,6 +73,38 @@ async function downloadSBLGNT() {
 
 // --- Phase B: Parse and insert Hebrew OT ---
 
+interface WordData {
+  text: string;
+  lemma: string;
+  morph: string;
+  segments: { text: string; lemma: string; morph: string }[];
+}
+
+function parseWLCWord(w: any): WordData | null {
+  const text = typeof w === 'string' ? w : (w['#text'] || '');
+  if (!text) return null;
+  const lemma = w['@_lemma'] || '';
+  const morph = w['@_morph'] || '';
+
+  // Split by '/' into segments
+  const textParts = text.trim().split('/');
+  const lemmaParts = lemma.split('/');
+  const morphParts = morph.split('/');
+
+  const segments = textParts.map((t: string, i: number) => ({
+    text: t,
+    lemma: lemmaParts[i] || '',
+    morph: morphParts[i] || '',
+  }));
+
+  return {
+    text: text.trim(),
+    lemma,
+    morph,
+    segments,
+  };
+}
+
 function parseWLC(db: Database.Database) {
   console.log('\n=== Parsing WLC Hebrew texts ===');
   const parser = new XMLParser({
@@ -92,9 +118,13 @@ function parseWLC(db: Database.Database) {
   const insertVerse = db.prepare(
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
+  const insertWord = db.prepare(
+    'INSERT OR IGNORE INTO words (verse_id, word_order, text, lemma, morph, segments) VALUES (?, ?, ?, ?, ?, ?)'
+  );
 
   const otBooks = BOOKS.filter(b => b.wlcFile);
   let totalVerses = 0;
+  let totalWords = 0;
 
   const insertMany = db.transaction(() => {
     for (const book of otBooks) {
@@ -102,17 +132,14 @@ function parseWLC(db: Database.Database) {
       const xml = fs.readFileSync(filePath, 'utf-8');
       const parsed = parser.parse(xml);
 
-      // Navigate: osis > osisText > div (book) > chapter[] > verse[]
       const osisText = parsed.osis?.osisText;
       if (!osisText) {
         console.error(`  [error] Could not parse ${book.wlcFile}.xml`);
         continue;
       }
 
-      // The div can be at different levels depending on parser config
       let chapters = osisText.div?.chapter;
       if (!chapters) {
-        // Try direct access
         const div = osisText.div;
         if (Array.isArray(div)) {
           chapters = div.flatMap((d: any) => d.chapter || []);
@@ -127,9 +154,9 @@ function parseWLC(db: Database.Database) {
 
       if (!Array.isArray(chapters)) chapters = [chapters];
       let bookVerseCount = 0;
+      let bookWordCount = 0;
 
       for (const chapter of chapters) {
-        // Get chapter number from osisID (e.g., "Gen.1")
         const chapterOsisID = chapter['@_osisID'] || '';
         const chapterNum = parseInt(chapterOsisID.split('.')[1], 10);
         if (!chapterNum) continue;
@@ -143,35 +170,45 @@ function parseWLC(db: Database.Database) {
           const verseNum = parseInt(osisID.split('.')[2], 10);
           if (!verseNum) continue;
 
-          // Extract text from <w> elements
-          const words: string[] = [];
           const wElements = verse.w;
-          if (wElements) {
-            const wArr = Array.isArray(wElements) ? wElements : [wElements];
-            for (const w of wArr) {
-              // The text content can be in #text or directly the value
-              const text = typeof w === 'string' ? w : (w['#text'] || '');
-              if (text) words.push(text.trim());
+          if (!wElements) continue;
+          const wArr = Array.isArray(wElements) ? wElements : [wElements];
+
+          const wordDataList: WordData[] = [];
+          for (const w of wArr) {
+            const wd = parseWLCWord(w);
+            if (wd) wordDataList.push(wd);
+          }
+
+          if (wordDataList.length === 0) continue;
+
+          const verseText = wordDataList.map(w => w.text).join(' ');
+          const result = insertVerse.run(book.id, chapterNum, verseNum, verseText);
+          const verseId = result.lastInsertRowid as number;
+
+          if (verseId) {
+            for (let i = 0; i < wordDataList.length; i++) {
+              const wd = wordDataList[i];
+              insertWord.run(
+                verseId, i + 1, wd.text, wd.lemma, wd.morph,
+                JSON.stringify(wd.segments)
+              );
+              bookWordCount++;
             }
           }
 
-          // Also handle <seg> elements that appear between words (like maqqef, sof-pasuq)
-          // These are already part of the word flow in OSIS
-          const verseText = words.join(' ');
-          if (verseText) {
-            insertVerse.run(book.id, chapterNum, verseNum, verseText);
-            bookVerseCount++;
-          }
+          bookVerseCount++;
         }
       }
 
       totalVerses += bookVerseCount;
-      console.log(`  ${book.name}: ${bookVerseCount} verses`);
+      totalWords += bookWordCount;
+      console.log(`  ${book.name}: ${bookVerseCount} verses, ${bookWordCount} words`);
     }
   });
 
   insertMany();
-  console.log(`  Total Hebrew verses: ${totalVerses}`);
+  console.log(`  Total Hebrew: ${totalVerses} verses, ${totalWords} words`);
 }
 
 // --- Phase C: Parse and insert Greek NT ---
@@ -182,9 +219,13 @@ function parseSBLGNT(db: Database.Database) {
   const insertVerse = db.prepare(
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
+  const insertWord = db.prepare(
+    'INSERT OR IGNORE INTO words (verse_id, word_order, text, lemma, morph, segments) VALUES (?, ?, ?, ?, ?, ?)'
+  );
 
   const ntBooks = BOOKS.filter(b => b.sblgntBook);
   let totalVerses = 0;
+  let totalWords = 0;
 
   const insertMany = db.transaction(() => {
     for (const book of ntBooks) {
@@ -195,44 +236,67 @@ function parseSBLGNT(db: Database.Database) {
       const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim());
 
       // Group words by verse reference
-      const verseWords = new Map<string, string[]>();
+      interface GkWord { text: string; word: string; lemma: string; pos: string; parsing: string; }
+      const verseWords = new Map<string, GkWord[]>();
 
       for (const line of lines) {
-        // Format: BBCCVV POS morph text word normalized lemma
-        // Columns are space-separated
+        // MorphGNT format: BBCCVV POS parsing text word normalized lemma
         const parts = line.split(/\s+/);
-        if (parts.length < 4) continue;
+        if (parts.length < 7) continue;
 
-        const ref = parts[0];     // e.g., "010101"
-        const text = parts[3];    // text with punctuation
+        const ref = parts[0];
+        const pos = parts[1];
+        const parsing = parts[2];
+        const text = parts[3];
+        const word = parts[4];
+        const lemma = parts[6];
 
-        if (!verseWords.has(ref)) {
-          verseWords.set(ref, []);
-        }
-        verseWords.get(ref)!.push(text);
+        if (!verseWords.has(ref)) verseWords.set(ref, []);
+        verseWords.get(ref)!.push({ text, word, lemma, pos, parsing });
       }
 
       let bookVerseCount = 0;
+      let bookWordCount = 0;
 
       for (const [ref, words] of verseWords) {
-        // Parse reference: first 2 digits = book (within MorphGNT), next 2 = chapter, last 2 = verse
         const chapterNum = parseInt(ref.substring(2, 4), 10);
         const verseNum = parseInt(ref.substring(4, 6), 10);
 
-        const verseText = words.join(' ');
-        if (verseText) {
-          insertVerse.run(book.id, chapterNum, verseNum, verseText);
-          bookVerseCount++;
+        const verseText = words.map(w => w.text).join(' ');
+        if (!verseText) continue;
+
+        const result = insertVerse.run(book.id, chapterNum, verseNum, verseText);
+        const verseId = result.lastInsertRowid as number;
+
+        if (verseId) {
+          for (let i = 0; i < words.length; i++) {
+            const w = words[i];
+            // Store morph as "POS|parsing" for Greek (decoded by morph.ts)
+            const morph = `${w.pos}|${w.parsing}`;
+            const segments = [{
+              text: w.text,
+              lemma: w.lemma,
+              morph,
+            }];
+            insertWord.run(
+              verseId, i + 1, w.text, w.lemma, morph,
+              JSON.stringify(segments)
+            );
+            bookWordCount++;
+          }
         }
+
+        bookVerseCount++;
       }
 
       totalVerses += bookVerseCount;
-      console.log(`  ${book.name}: ${bookVerseCount} verses`);
+      totalWords += bookWordCount;
+      console.log(`  ${book.name}: ${bookVerseCount} verses, ${bookWordCount} words`);
     }
   });
 
   insertMany();
-  console.log(`  Total Greek verses: ${totalVerses}`);
+  console.log(`  Total Greek: ${totalVerses} verses, ${totalWords} words`);
 }
 
 // --- Main ---
@@ -247,16 +311,13 @@ async function main() {
     console.log('Deleted existing database.');
   }
 
-  // Create fresh database
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  // Initialize schema
   console.log('\n=== Initializing schema ===');
   initializeSchema(db);
 
-  // Insert books
   console.log('\n=== Inserting books ===');
   const insertBook = db.prepare(
     'INSERT OR IGNORE INTO books (id, name, abbreviation, testament, language, book_order, chapter_count) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -269,25 +330,24 @@ async function main() {
   insertBooks();
   console.log(`  Inserted ${BOOKS.length} books`);
 
-  // Download data
   await downloadWLC();
   await downloadSBLGNT();
 
-  // Parse and insert
   parseWLC(db);
   parseSBLGNT(db);
 
-  // Build FTS index
   console.log('\n=== Building FTS5 index ===');
   initializeFts(db);
 
   // Print summary
   const verseCount = db.prepare('SELECT COUNT(*) as count FROM verses').get() as any;
+  const wordCount = db.prepare('SELECT COUNT(*) as count FROM words').get() as any;
   const otCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('OT') as any;
   const ntCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('NT') as any;
 
   console.log('\n=== Seed Complete ===');
   console.log(`  Total verses: ${verseCount.count}`);
+  console.log(`  Total words: ${wordCount.count}`);
   console.log(`  OT (Hebrew): ${otCount.count}`);
   console.log(`  NT (Greek): ${ntCount.count}`);
   console.log(`  Database size: ${(fs.statSync(DB_PATH).size / 1024 / 1024).toFixed(1)} MB`);

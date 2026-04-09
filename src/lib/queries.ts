@@ -95,22 +95,49 @@ export function deleteMetaphor(id: number) {
   return db.prepare('DELETE FROM metaphors WHERE id = ?').run(id);
 }
 
+// --- Words ---
+
+export function getWordsForVerse(verseId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    'SELECT * FROM words WHERE verse_id = ? ORDER BY word_order'
+  ).all(verseId);
+}
+
+export function getWordsForVerses(verseIds: number[]) {
+  const db = ensureSchema();
+  if (verseIds.length === 0) return [];
+  const placeholders = verseIds.map(() => '?').join(',');
+  return db.prepare(
+    `SELECT * FROM words WHERE verse_id IN (${placeholders}) ORDER BY verse_id, word_order`
+  ).all(...verseIds);
+}
+
 // --- Verse Metaphors (Annotations) ---
 
 export function getAnnotationsForVerse(verseId: number) {
   const db = ensureSchema();
-  return db.prepare(
+  const annotations = db.prepare(
     `SELECT vm.*, m.name as metaphor_name, m.category as metaphor_category
      FROM verse_metaphors vm
      JOIN metaphors m ON vm.metaphor_id = m.id
      WHERE vm.verse_id = ?
      ORDER BY vm.created_at DESC`
-  ).all(verseId);
+  ).all(verseId) as any[];
+
+  // Attach word_ids for each annotation
+  const getWordIds = db.prepare(
+    'SELECT word_id FROM annotation_words WHERE annotation_id = ? ORDER BY word_id'
+  );
+  for (const a of annotations) {
+    a.word_ids = (getWordIds.all(a.id) as any[]).map(r => r.word_id);
+  }
+  return annotations;
 }
 
 export function getAnnotationsForMetaphor(metaphorId: number) {
   const db = ensureSchema();
-  return db.prepare(
+  const annotations = db.prepare(
     `SELECT vm.*, v.chapter, v.verse, v.original_text,
             b.abbreviation, b.name as book_name, b.language
      FROM verse_metaphors vm
@@ -118,7 +145,15 @@ export function getAnnotationsForMetaphor(metaphorId: number) {
      JOIN books b ON v.book_id = b.id
      WHERE vm.metaphor_id = ?
      ORDER BY b.book_order, v.chapter, v.verse`
-  ).all(metaphorId);
+  ).all(metaphorId) as any[];
+
+  const getWordIds = db.prepare(
+    'SELECT word_id FROM annotation_words WHERE annotation_id = ? ORDER BY word_id'
+  );
+  for (const a of annotations) {
+    a.word_ids = (getWordIds.all(a.id) as any[]).map(r => r.word_id);
+  }
+  return annotations;
 }
 
 export function createAnnotation(data: {
@@ -129,9 +164,10 @@ export function createAnnotation(data: {
   notes?: string;
   confidence?: string;
   linguistic_evidence?: string;
+  word_ids?: number[];
 }) {
   const db = ensureSchema();
-  return db.prepare(
+  const result = db.prepare(
     `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, notes, confidence, linguistic_evidence)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
@@ -140,6 +176,18 @@ export function createAnnotation(data: {
     data.notes || null, data.confidence || 'draft',
     data.linguistic_evidence || null
   );
+
+  // Link selected words
+  if (data.word_ids && data.word_ids.length > 0) {
+    const insertAW = db.prepare(
+      'INSERT OR IGNORE INTO annotation_words (annotation_id, word_id) VALUES (?, ?)'
+    );
+    for (const wordId of data.word_ids) {
+      insertAW.run(result.lastInsertRowid, wordId);
+    }
+  }
+
+  return result;
 }
 
 export function updateAnnotation(id: number, data: {
@@ -149,6 +197,7 @@ export function updateAnnotation(id: number, data: {
   confidence?: string;
   linguistic_evidence?: string;
   metaphor_id?: number;
+  word_ids?: number[];
 }) {
   const db = ensureSchema();
   const sets: string[] = [];
@@ -161,11 +210,26 @@ export function updateAnnotation(id: number, data: {
   if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
-  return db.prepare(`UPDATE verse_metaphors SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  db.prepare(`UPDATE verse_metaphors SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+
+  // Update word links if provided
+  if (data.word_ids !== undefined) {
+    db.prepare('DELETE FROM annotation_words WHERE annotation_id = ?').run(id);
+    if (data.word_ids.length > 0) {
+      const insertAW = db.prepare(
+        'INSERT OR IGNORE INTO annotation_words (annotation_id, word_id) VALUES (?, ?)'
+      );
+      for (const wordId of data.word_ids) {
+        insertAW.run(id, wordId);
+      }
+    }
+  }
 }
 
 export function deleteAnnotation(id: number) {
   const db = ensureSchema();
+  // annotation_words cascade on delete, but be explicit
+  db.prepare('DELETE FROM annotation_words WHERE annotation_id = ?').run(id);
   return db.prepare('DELETE FROM verse_metaphors WHERE id = ?').run(id);
 }
 
