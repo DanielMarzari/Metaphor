@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, use, useRef } from 'react';
+import { useState, useEffect, use, useRef } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen } from 'lucide-react';
 
 interface Verse {
   id: number; book_id: number; chapter: number; verse: number;
@@ -26,7 +26,7 @@ interface Metaphor {
   id: number; name: string; description: string; category: string; usage_count: number;
 }
 
-// --- Morph decoder (client-side, mirrors server lib/morph.ts) ---
+// --- Morph decoder (client-side) ---
 
 const HEB_VERB_STEM: Record<string, string> = {
   q: 'Qal', N: 'Niphal', p: 'Piel', P: 'Pual', h: 'Hiphil',
@@ -125,16 +125,16 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [verses, setVerses] = useState<Verse[]>([]);
   const [wordsByVerse, setWordsByVerse] = useState<Map<number, Word[]>>(new Map());
   const [annotations, setAnnotations] = useState<Map<number, Annotation[]>>(new Map());
-  const [activeVerse, setActiveVerse] = useState<Verse | null>(null);
   const [metaphors, setMetaphors] = useState<Metaphor[]>([]);
   const [showPanel, setShowPanel] = useState(false);
 
-  // Word selection
+  // Word selection — always active, no special mode needed
   const [selectedWordIds, setSelectedWordIds] = useState<Set<number>>(new Set());
-  const [selectingWords, setSelectingWords] = useState(false);
+  const [selectionVerseId, setSelectionVerseId] = useState<number | null>(null);
 
-  // Parsing popup
-  const [popupWord, setPopupWord] = useState<{ word: Word; x: number; y: number } | null>(null);
+  // Hover tooltip
+  const [hoverWord, setHoverWord] = useState<{ word: Word; x: number; y: number } | null>(null);
+  const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Annotation form state
   const [selectedMetaphor, setSelectedMetaphor] = useState<number | null>(null);
@@ -162,12 +162,10 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     const data: Verse[] = await res.json();
     setVerses(data);
 
-    // Load words for all verses in one batch
     const verseIds = data.map(v => v.id);
     if (verseIds.length > 0) {
       const wRes = await fetch(`/api/words?verse_ids=${verseIds.join(',')}`);
       const allWords: Word[] = await wRes.json();
-      // Parse segments JSON
       for (const w of allWords) {
         if (typeof w.segments === 'string') w.segments = JSON.parse(w.segments);
       }
@@ -179,7 +177,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setWordsByVerse(wMap);
     }
 
-    // Load annotations
     const annotMap = new Map<number, Annotation[]>();
     for (const v of data) {
       const aRes = await fetch(`/api/verse-metaphors?verse_id=${v.id}`);
@@ -189,11 +186,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setAnnotations(annotMap);
   }
 
-  function openAnnotatePanel(verse: Verse, annotation?: Annotation) {
-    setActiveVerse(verse);
+  function clearSelection() {
+    setSelectedWordIds(new Set());
+    setSelectionVerseId(null);
+  }
+
+  function openAnnotatePanel(verseId: number, annotation?: Annotation) {
     setShowPanel(true);
-    setSelectingWords(true);
-    setPopupWord(null);
     if (annotation) {
       setEditingAnnotation(annotation);
       setSelectedMetaphor(annotation.metaphor_id);
@@ -203,12 +202,14 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setConfidence(annotation.confidence);
       setLinguisticEvidence(annotation.linguistic_evidence || '');
       setSelectedWordIds(new Set(annotation.word_ids || []));
+      setSelectionVerseId(annotation.verse_id);
     } else {
-      resetForm();
+      // Keep current word selection — user already picked words
+      resetFormFields();
     }
   }
 
-  function resetForm() {
+  function resetFormFields() {
     setEditingAnnotation(null);
     setSelectedMetaphor(null);
     setNewMetaphorName('');
@@ -217,37 +218,49 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setNotes('');
     setConfidence('draft');
     setLinguisticEvidence('');
-    setSelectedWordIds(new Set());
   }
 
   function closePanel() {
     setShowPanel(false);
-    setActiveVerse(null);
-    setSelectingWords(false);
-    resetForm();
+    resetFormFields();
+    clearSelection();
   }
 
-  function toggleWordSelection(wordId: number) {
+  function handleWordClick(word: Word, e: React.MouseEvent) {
+    e.stopPropagation();
+    // If clicking a word in a different verse, clear previous selection
+    if (selectionVerseId !== null && selectionVerseId !== word.verse_id) {
+      setSelectedWordIds(new Set([word.id]));
+      setSelectionVerseId(word.verse_id);
+      return;
+    }
+
+    setSelectionVerseId(word.verse_id);
     setSelectedWordIds(prev => {
       const next = new Set(prev);
-      if (next.has(wordId)) next.delete(wordId);
-      else next.add(wordId);
+      if (next.has(word.id)) next.delete(word.id);
+      else next.add(word.id);
+      // If empty, clear verse context
+      if (next.size === 0) setSelectionVerseId(null);
       return next;
     });
   }
 
-  function handleWordClick(word: Word, e: React.MouseEvent) {
-    if (selectingWords && activeVerse && word.verse_id === activeVerse.id) {
-      toggleWordSelection(word.id);
-    } else {
-      // Show parsing popup
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      setPopupWord({ word, x: rect.left + rect.width / 2, y: rect.bottom + 4 });
-    }
+  function handleWordHover(word: Word, e: React.MouseEvent) {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    hoverTimeout.current = setTimeout(() => {
+      setHoverWord({ word, x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+    }, 400);
+  }
+
+  function handleWordLeave() {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    setHoverWord(null);
   }
 
   async function handleSave() {
-    if (!activeVerse) return;
+    if (!selectionVerseId) return;
 
     let metaphorId = selectedMetaphor;
 
@@ -267,7 +280,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     if (!metaphorId) { alert('Select or create a metaphor'); return; }
 
     const payload = {
-      verse_id: activeVerse.id,
+      verse_id: selectionVerseId,
       metaphor_id: metaphorId,
       source_domain: sourceDomain || undefined,
       target_domain: targetDomain || undefined,
@@ -291,9 +304,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       });
     }
 
-    const aRes = await fetch(`/api/verse-metaphors?verse_id=${activeVerse.id}`);
+    const aRes = await fetch(`/api/verse-metaphors?verse_id=${selectionVerseId}`);
     const aData = await aRes.json();
-    setAnnotations(prev => new Map(prev).set(activeVerse.id, aData));
+    setAnnotations(prev => new Map(prev).set(selectionVerseId!, aData));
     closePanel();
   }
 
@@ -310,22 +323,12 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     });
   }
 
-  // Close parsing popup when clicking outside
-  useEffect(() => {
-    function handleClick() { setPopupWord(null); }
-    if (popupWord) {
-      document.addEventListener('click', handleClick);
-      return () => document.removeEventListener('click', handleClick);
-    }
-  }, [popupWord]);
-
   if (!bookInfo) return <div className="min-h-screen flex items-center justify-center" style={{ color: 'var(--muted)' }}>Loading...</div>;
 
   const isHebrew = bookInfo.language === 'hebrew';
   const prevChapter = chapter > 1 ? chapter - 1 : null;
   const nextChapter = chapter < bookInfo.chapter_count ? chapter + 1 : null;
 
-  // Collect all highlighted word IDs from annotations for this verse
   function getHighlightedWordIds(verseId: number): Map<number, string> {
     const map = new Map<number, string>();
     const annots = annotations.get(verseId) || [];
@@ -336,6 +339,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     }
     return map;
   }
+
+  // Find verse object for the current selection
+  const selectionVerse = selectionVerseId ? verses.find(v => v.id === selectionVerseId) : null;
 
   return (
     <div className="min-h-screen">
@@ -349,6 +355,15 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {isHebrew && (
+            <a href="https://uhg.readthedocs.io/en/latest/front.html" target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs hover:shadow-sm"
+              style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
+              title="Hebrew Grammar Reference (UHG)">
+              <BookOpen className="w-3.5 h-3.5" />
+              UHG
+            </a>
+          )}
           {prevChapter && (
             <Link href={`/browse/${bookAbbr.toLowerCase()}/${prevChapter}`} className="p-2 rounded-lg border hover:shadow-sm" style={{ borderColor: 'var(--border)' }}>
               <ChevronLeft className="w-4 h-4" />
@@ -363,36 +378,38 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       </header>
 
       {/* Verses */}
-      <main className="max-w-4xl mx-auto px-6 py-6">
+      <main className={`max-w-4xl mx-auto px-6 py-6 ${selectedWordIds.size > 0 ? 'pb-24' : ''}`}>
         <div className="space-y-4">
           {verses.map(verse => {
             const verseAnnotations = annotations.get(verse.id) || [];
             const words = wordsByVerse.get(verse.id) || [];
             const highlightMap = getHighlightedWordIds(verse.id);
-            const isActive = activeVerse?.id === verse.id;
+            const hasSelection = selectionVerseId === verse.id && selectedWordIds.size > 0;
 
             return (
               <div key={verse.id}
-                className={`group rounded-lg p-4 border transition-all hover:shadow-sm ${isActive ? 'ring-2' : ''}`}
+                className={`group rounded-lg p-4 border transition-all hover:shadow-sm ${hasSelection ? 'ring-2' : ''}`}
                 style={{
                   backgroundColor: 'var(--verse-bg)',
                   borderColor: 'var(--border)',
-                  ringColor: isActive ? 'var(--primary)' : undefined,
+                  ...(hasSelection ? { boxShadow: '0 0 0 2px var(--primary)' } : {}),
                 }}>
-                {/* Verse text with individual words */}
+                {/* Verse text with individual clickable words */}
                 <div className={isHebrew ? 'hebrew-text' : 'greek-text'}>
                   <span className="verse-number">{verse.verse}</span>
                   {words.length > 0 ? (
                     words.map(word => {
-                      const isSelected = selectingWords && isActive && selectedWordIds.has(word.id);
+                      const isSelected = selectedWordIds.has(word.id);
                       const highlightConf = highlightMap.get(word.id);
                       return (
                         <span
                           key={word.id}
-                          onClick={(e) => { e.stopPropagation(); handleWordClick(word, e); }}
+                          onClick={(e) => handleWordClick(word, e)}
+                          onMouseEnter={(e) => handleWordHover(word, e)}
+                          onMouseLeave={handleWordLeave}
                           className="word-token"
                           style={{
-                            cursor: (selectingWords && isActive) ? 'pointer' : 'help',
+                            cursor: 'pointer',
                             borderRadius: '3px',
                             padding: '1px 2px',
                             margin: '0 1px',
@@ -420,7 +437,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                 {verseAnnotations.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3" style={{ direction: 'ltr' }}>
                     {verseAnnotations.map(a => (
-                      <button key={a.id} onClick={() => openAnnotatePanel(verse, a)}
+                      <button key={a.id} onClick={() => openAnnotatePanel(verse.id, a)}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
                         style={{
                           backgroundColor: `color-mix(in srgb, var(--${a.confidence}) 15%, transparent)`,
@@ -436,38 +453,28 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     ))}
                   </div>
                 )}
-
-                {/* Add annotation button */}
-                <div className="flex justify-end mt-2 opacity-0 group-hover:opacity-100 transition-opacity" style={{ direction: 'ltr' }}>
-                  <button onClick={() => openAnnotatePanel(verse)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs hover:opacity-80"
-                    style={{ color: 'var(--primary)' }}>
-                    <Plus className="w-3 h-3" /> Annotate
-                  </button>
-                </div>
               </div>
             );
           })}
         </div>
       </main>
 
-      {/* Parsing popup */}
-      {popupWord && (
+      {/* Hover parsing tooltip */}
+      {hoverWord && (
         <div
-          className="fixed z-[60] rounded-lg shadow-xl border p-3 max-w-xs"
+          className="fixed z-[60] rounded-lg shadow-xl border p-3 max-w-xs pointer-events-none"
           style={{
-            left: `${Math.min(popupWord.x, window.innerWidth - 300)}px`,
-            top: `${popupWord.y}px`,
+            left: `${Math.min(Math.max(hoverWord.x - 120, 8), window.innerWidth - 260)}px`,
+            top: `${hoverWord.y}px`,
             backgroundColor: 'var(--surface)',
             borderColor: 'var(--border)',
           }}
-          onClick={(e) => e.stopPropagation()}
         >
           <div className={`text-lg mb-2 font-semibold ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
             style={{ fontSize: '1.3rem' }}>
-            {popupWord.word.text}
+            {hoverWord.word.text}
           </div>
-          {popupWord.word.segments.map((seg, i) => (
+          {hoverWord.word.segments.map((seg, i) => (
             <div key={i} className="mb-1.5 last:mb-0">
               <div className="flex items-baseline gap-2">
                 <span className={`font-medium ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
@@ -490,8 +497,39 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
         </div>
       )}
 
+      {/* Floating selection bar — appears when words are selected */}
+      {selectedWordIds.size > 0 && !showPanel && selectionVerse && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 rounded-xl shadow-2xl border px-4 py-3 flex items-center gap-3 max-w-lg"
+          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium" style={{ color: 'var(--muted)' }}>
+              {selectionVerse.book_name} {selectionVerse.chapter}:{selectionVerse.verse}
+            </div>
+            <div className={`text-sm truncate mt-0.5 ${isHebrew ? 'hebrew-text' : 'greek-text'}`} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+              {(() => {
+                const verseWords = wordsByVerse.get(selectionVerseId!) || [];
+                return verseWords.filter(w => selectedWordIds.has(w.id)).map(w => w.text).join(' ');
+              })()}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>{selectedWordIds.size}w</span>
+            <button onClick={() => openAnnotatePanel(selectionVerseId!)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg font-medium text-white text-sm"
+              style={{ backgroundColor: 'var(--primary)' }}>
+              <Tag className="w-3.5 h-3.5" /> Annotate
+            </button>
+            <button onClick={clearSelection}
+              className="p-1.5 rounded-lg hover:bg-gray-100"
+              style={{ color: 'var(--muted)' }}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Annotation Panel (slide-out) */}
-      {showPanel && activeVerse && (
+      {showPanel && selectionVerseId && selectionVerse && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/30" onClick={closePanel} />
           <div className="relative w-full max-w-md h-full overflow-y-auto shadow-2xl" style={{ backgroundColor: 'var(--surface)' }}>
@@ -503,23 +541,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
             </div>
 
             <div className="p-5 space-y-5">
-              {/* Verse reference */}
+              {/* Verse reference + selected words */}
               <div className="p-3 rounded-lg text-sm" style={{ backgroundColor: 'var(--surface-2)' }}>
-                <span className="font-medium">{activeVerse.book_name} {activeVerse.chapter}:{activeVerse.verse}</span>
-                <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
-                  Click words in the verse to select them for this annotation
-                </div>
-              </div>
-
-              {/* Selected words display */}
-              {selectedWordIds.size > 0 && (
-                <div>
-                  <label className="block text-xs font-medium mb-2" style={{ color: 'var(--muted)' }}>
-                    Selected Words ({selectedWordIds.size})
-                  </label>
-                  <div className="flex flex-wrap gap-1.5">
+                <span className="font-medium">{selectionVerse.book_name} {selectionVerse.chapter}:{selectionVerse.verse}</span>
+                {selectedWordIds.size > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
                     {(() => {
-                      const verseWords = wordsByVerse.get(activeVerse.id) || [];
+                      const verseWords = wordsByVerse.get(selectionVerseId) || [];
                       return verseWords
                         .filter(w => selectedWordIds.has(w.id))
                         .map(w => (
@@ -530,7 +558,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                               borderColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
                               color: 'var(--primary)',
                             }}
-                            onClick={() => toggleWordSelection(w.id)}
+                            onClick={() => {
+                              setSelectedWordIds(prev => {
+                                const next = new Set(prev);
+                                next.delete(w.id);
+                                return next;
+                              });
+                            }}
                           >
                             <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>
                               {w.text}
@@ -541,8 +575,11 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                         ));
                     })()}
                   </div>
+                )}
+                <div className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
+                  Click words in the verse above to add/remove from selection
                 </div>
-              )}
+              </div>
 
               {/* Metaphor selection */}
               <div>
@@ -619,7 +656,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                   <Save className="w-4 h-4" /> {editingAnnotation ? 'Update' : 'Save'}
                 </button>
                 {editingAnnotation && (
-                  <button onClick={() => { handleDelete(editingAnnotation.id, activeVerse.id); closePanel(); }}
+                  <button onClick={() => { handleDelete(editingAnnotation.id, selectionVerseId!); closePanel(); }}
                     className="px-4 py-2.5 rounded-lg text-sm border"
                     style={{ color: 'var(--disputed)', borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)' }}>
                     <Trash2 className="w-4 h-4" />
