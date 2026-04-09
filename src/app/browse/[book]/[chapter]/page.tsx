@@ -10,9 +10,8 @@ interface Verse {
 }
 
 interface Word {
-  id: number; verse_id: number; word_order: number; text: string;
-  lemma: string; morph: string;
-  segments: { text: string; lemma: string; morph: string }[];
+  id: number; verse_id: number; word_order: number; word_group: number;
+  text: string; lemma: string; morph: string;
 }
 
 interface Annotation {
@@ -128,7 +127,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [metaphors, setMetaphors] = useState<Metaphor[]>([]);
   const [showPanel, setShowPanel] = useState(false);
 
-  // Word selection — always active, no special mode needed
+  // Word selection
   const [selectedWordIds, setSelectedWordIds] = useState<Set<number>>(new Set());
   const [selectionVerseId, setSelectionVerseId] = useState<number | null>(null);
 
@@ -166,9 +165,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     if (verseIds.length > 0) {
       const wRes = await fetch(`/api/words?verse_ids=${verseIds.join(',')}`);
       const allWords: Word[] = await wRes.json();
-      for (const w of allWords) {
-        if (typeof w.segments === 'string') w.segments = JSON.parse(w.segments);
-      }
       const wMap = new Map<number, Word[]>();
       for (const w of allWords) {
         if (!wMap.has(w.verse_id)) wMap.set(w.verse_id, []);
@@ -204,7 +200,10 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setSelectedWordIds(new Set(annotation.word_ids || []));
       setSelectionVerseId(annotation.verse_id);
     } else {
-      // Keep current word selection — user already picked words
+      if (selectionVerseId !== verseId) {
+        setSelectedWordIds(new Set());
+      }
+      setSelectionVerseId(verseId);
       resetFormFields();
     }
   }
@@ -228,19 +227,16 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
   function handleWordClick(word: Word, e: React.MouseEvent) {
     e.stopPropagation();
-    // If clicking a word in a different verse, clear previous selection
     if (selectionVerseId !== null && selectionVerseId !== word.verse_id) {
       setSelectedWordIds(new Set([word.id]));
       setSelectionVerseId(word.verse_id);
       return;
     }
-
     setSelectionVerseId(word.verse_id);
     setSelectedWordIds(prev => {
       const next = new Set(prev);
       if (next.has(word.id)) next.delete(word.id);
       else next.add(word.id);
-      // If empty, clear verse context
       if (next.size === 0) setSelectionVerseId(null);
       return next;
     });
@@ -261,9 +257,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
   async function handleSave() {
     if (!selectionVerseId) return;
-
     let metaphorId = selectedMetaphor;
-
     if (!metaphorId && newMetaphorName.trim()) {
       const res = await fetch('/api/metaphors', {
         method: 'POST',
@@ -276,9 +270,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       const mRes = await fetch('/api/metaphors');
       setMetaphors(await mRes.json());
     }
-
     if (!metaphorId) { alert('Select or create a metaphor'); return; }
-
     const payload = {
       verse_id: selectionVerseId,
       metaphor_id: metaphorId,
@@ -289,7 +281,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       linguistic_evidence: linguisticEvidence || undefined,
       word_ids: Array.from(selectedWordIds),
     };
-
     if (editingAnnotation) {
       await fetch(`/api/verse-metaphors/${editingAnnotation.id}`, {
         method: 'PUT',
@@ -303,7 +294,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
         body: JSON.stringify(payload),
       });
     }
-
     const aRes = await fetch(`/api/verse-metaphors?verse_id=${selectionVerseId}`);
     const aData = await aRes.json();
     setAnnotations(prev => new Map(prev).set(selectionVerseId!, aData));
@@ -340,7 +330,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     return map;
   }
 
-  // Find verse object for the current selection
   const selectionVerse = selectionVerseId ? verses.find(v => v.id === selectionVerseId) : null;
 
   return (
@@ -378,7 +367,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       </header>
 
       {/* Verses */}
-      <main className={`max-w-4xl mx-auto px-6 py-6 ${selectedWordIds.size > 0 ? 'pb-24' : ''}`}>
+      <main className="max-w-4xl mx-auto px-6 py-6">
         <div className="space-y-4">
           {verses.map(verse => {
             const verseAnnotations = annotations.get(verse.id) || [];
@@ -388,44 +377,49 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
             return (
               <div key={verse.id}
-                className={`group rounded-lg p-4 border transition-all hover:shadow-sm ${hasSelection ? 'ring-2' : ''}`}
+                className="group rounded-lg p-4 border transition-all hover:shadow-sm"
                 style={{
                   backgroundColor: 'var(--verse-bg)',
-                  borderColor: 'var(--border)',
-                  ...(hasSelection ? { boxShadow: '0 0 0 2px var(--primary)' } : {}),
+                  borderColor: hasSelection ? 'var(--primary)' : 'var(--border)',
+                  boxShadow: hasSelection ? '0 0 0 1px var(--primary)' : undefined,
                 }}>
-                {/* Verse text with individual clickable words */}
+                {/* Verse text — segments rendered individually, spaces between word groups */}
                 <div className={isHebrew ? 'hebrew-text' : 'greek-text'}>
                   <span className="verse-number">{verse.verse}</span>
                   {words.length > 0 ? (
-                    words.map(word => {
+                    words.map((word, idx) => {
                       const isSelected = selectedWordIds.has(word.id);
                       const highlightConf = highlightMap.get(word.id);
+                      const nextWord = words[idx + 1];
+                      // Add space between word groups, not between segments within a group
+                      const needsSpace = nextWord && nextWord.word_group !== word.word_group;
                       return (
-                        <span
-                          key={word.id}
-                          onClick={(e) => handleWordClick(word, e)}
-                          onMouseEnter={(e) => handleWordHover(word, e)}
-                          onMouseLeave={handleWordLeave}
-                          className="word-token"
-                          style={{
-                            cursor: 'pointer',
-                            borderRadius: '3px',
-                            padding: '1px 2px',
-                            margin: '0 1px',
-                            display: 'inline',
-                            transition: 'all 0.15s',
-                            backgroundColor: isSelected
-                              ? 'color-mix(in srgb, var(--primary) 25%, transparent)'
-                              : highlightConf
-                                ? `color-mix(in srgb, var(--${highlightConf}) 12%, transparent)`
-                                : 'transparent',
-                            outline: isSelected ? '2px solid var(--primary)' : 'none',
-                            textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
-                            textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
-                            textUnderlineOffset: '4px',
-                          }}
-                        >{word.text} </span>
+                        <span key={word.id}>
+                          <span
+                            onClick={(e) => handleWordClick(word, e)}
+                            onMouseEnter={(e) => handleWordHover(word, e)}
+                            onMouseLeave={handleWordLeave}
+                            className="word-token"
+                            style={{
+                              cursor: 'pointer',
+                              borderRadius: '3px',
+                              padding: '1px 2px',
+                              display: 'inline',
+                              transition: 'all 0.15s',
+                              backgroundColor: isSelected
+                                ? 'color-mix(in srgb, var(--primary) 25%, transparent)'
+                                : highlightConf
+                                  ? `color-mix(in srgb, var(--${highlightConf}) 12%, transparent)`
+                                  : 'transparent',
+                              outline: isSelected ? '2px solid var(--primary)' : 'none',
+                              outlineOffset: '1px',
+                              textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
+                              textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
+                              textUnderlineOffset: '4px',
+                            }}
+                          >{word.text}</span>
+                          {needsSpace && ' '}
+                        </span>
                       );
                     })
                   ) : (
@@ -433,26 +427,29 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                   )}
                 </div>
 
-                {/* Annotations */}
-                {verseAnnotations.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-3" style={{ direction: 'ltr' }}>
-                    {verseAnnotations.map(a => (
-                      <button key={a.id} onClick={() => openAnnotatePanel(verse.id, a)}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
-                        style={{
-                          backgroundColor: `color-mix(in srgb, var(--${a.confidence}) 15%, transparent)`,
-                          color: `var(--${a.confidence})`,
-                          border: `1px solid color-mix(in srgb, var(--${a.confidence}) 30%, transparent)`,
-                        }}>
-                        <Tag className="w-3 h-3" />
-                        {a.metaphor_name}
-                        {a.word_ids?.length > 0 && (
-                          <span className="opacity-60">({a.word_ids.length}w)</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {/* Annotations + Annotate button */}
+                <div className="flex flex-wrap items-center gap-2 mt-3" style={{ direction: 'ltr' }}>
+                  {verseAnnotations.map(a => (
+                    <button key={a.id} onClick={() => openAnnotatePanel(verse.id, a)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
+                      style={{
+                        backgroundColor: `color-mix(in srgb, var(--${a.confidence}) 15%, transparent)`,
+                        color: `var(--${a.confidence})`,
+                        border: `1px solid color-mix(in srgb, var(--${a.confidence}) 30%, transparent)`,
+                      }}>
+                      <Tag className="w-3 h-3" />
+                      {a.metaphor_name}
+                      {a.word_ids?.length > 0 && (
+                        <span className="opacity-60">({a.word_ids.length}w)</span>
+                      )}
+                    </button>
+                  ))}
+                  <button onClick={() => openAnnotatePanel(verse.id)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-80"
+                    style={{ color: 'var(--primary)' }}>
+                    <Plus className="w-3 h-3" /> Annotate
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -470,135 +467,92 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
             borderColor: 'var(--border)',
           }}
         >
-          <div className={`text-lg mb-2 font-semibold ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
+          <div className={`text-lg mb-1 font-semibold ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
             style={{ fontSize: '1.3rem' }}>
             {hoverWord.word.text}
           </div>
-          {hoverWord.word.segments.map((seg, i) => (
-            <div key={i} className="mb-1.5 last:mb-0">
-              <div className="flex items-baseline gap-2">
-                <span className={`font-medium ${isHebrew ? 'hebrew-text' : 'greek-text'}`}
-                  style={{ fontSize: '1rem' }}>
-                  {seg.text}
-                </span>
-                <span className="text-xs px-1.5 py-0.5 rounded" style={{
-                  backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
-                }}>
-                  {decodeMorph(seg.morph, bookInfo.language)}
-                </span>
+          <div className="text-xs px-1.5 py-0.5 rounded inline-block" style={{
+            backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
+          }}>
+            {decodeMorph(hoverWord.word.morph, bookInfo.language)}
+          </div>
+          {hoverWord.word.lemma && (
+            <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
+              Lemma: {hoverWord.word.lemma}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Annotation Panel — bottom drawer */}
+      {showPanel && selectionVerseId && selectionVerse && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={closePanel} />
+          <div className="relative w-full max-h-[75vh] overflow-y-auto shadow-2xl rounded-t-2xl"
+            style={{ backgroundColor: 'var(--surface)' }}>
+            {/* Drag handle + header */}
+            <div className="sticky top-0 rounded-t-2xl border-b px-5 pt-3 pb-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
+              <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ backgroundColor: 'var(--border)' }} />
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold">
+                  {editingAnnotation ? 'Edit Annotation' : 'New Annotation'}
+                  <span className="font-normal text-sm ml-2" style={{ color: 'var(--muted)' }}>
+                    {selectionVerse.book_name} {selectionVerse.chapter}:{selectionVerse.verse}
+                  </span>
+                </h2>
+                <button onClick={closePanel} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
               </div>
-              {seg.lemma && (
-                <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                  Lemma: {seg.lemma}
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Selected words */}
+              {selectedWordIds.size > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {(() => {
+                    const verseWords = wordsByVerse.get(selectionVerseId) || [];
+                    return verseWords
+                      .filter(w => selectedWordIds.has(w.id))
+                      .map(w => (
+                        <span key={w.id}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm border cursor-pointer hover:opacity-70"
+                          style={{
+                            backgroundColor: 'color-mix(in srgb, var(--primary) 10%, transparent)',
+                            borderColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+                            color: 'var(--primary)',
+                          }}
+                          onClick={() => {
+                            setSelectedWordIds(prev => { const next = new Set(prev); next.delete(w.id); return next; });
+                          }}
+                        >
+                          <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>
+                            {w.text}
+                          </span>
+                          <span className="text-[10px] opacity-60">{decodeMorph(w.morph, bookInfo.language)}</span>
+                          <X className="w-3 h-3 opacity-50" />
+                        </span>
+                      ));
+                  })()}
                 </div>
               )}
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* Floating selection bar — appears when words are selected */}
-      {selectedWordIds.size > 0 && !showPanel && selectionVerse && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 rounded-xl shadow-2xl border px-4 py-3 flex items-center gap-3 max-w-lg"
-          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium" style={{ color: 'var(--muted)' }}>
-              {selectionVerse.book_name} {selectionVerse.chapter}:{selectionVerse.verse}
-            </div>
-            <div className={`text-sm truncate mt-0.5 ${isHebrew ? 'hebrew-text' : 'greek-text'}`} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
-              {(() => {
-                const verseWords = wordsByVerse.get(selectionVerseId!) || [];
-                return verseWords.filter(w => selectedWordIds.has(w.id)).map(w => w.text).join(' ');
-              })()}
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <span className="text-xs tabular-nums" style={{ color: 'var(--muted)' }}>{selectedWordIds.size}w</span>
-            <button onClick={() => openAnnotatePanel(selectionVerseId!)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg font-medium text-white text-sm"
-              style={{ backgroundColor: 'var(--primary)' }}>
-              <Tag className="w-3.5 h-3.5" /> Annotate
-            </button>
-            <button onClick={clearSelection}
-              className="p-1.5 rounded-lg hover:bg-gray-100"
-              style={{ color: 'var(--muted)' }}>
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Annotation Panel (slide-out) */}
-      {showPanel && selectionVerseId && selectionVerse && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={closePanel} />
-          <div className="relative w-full max-w-md h-full overflow-y-auto shadow-2xl" style={{ backgroundColor: 'var(--surface)' }}>
-            <div className="sticky top-0 border-b px-5 py-4 flex items-center justify-between" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
-              <h2 className="font-semibold">
-                {editingAnnotation ? 'Edit Annotation' : 'New Annotation'}
-              </h2>
-              <button onClick={closePanel} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
-            </div>
-
-            <div className="p-5 space-y-5">
-              {/* Verse reference + selected words */}
-              <div className="p-3 rounded-lg text-sm" style={{ backgroundColor: 'var(--surface-2)' }}>
-                <span className="font-medium">{selectionVerse.book_name} {selectionVerse.chapter}:{selectionVerse.verse}</span>
-                {selectedWordIds.size > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {(() => {
-                      const verseWords = wordsByVerse.get(selectionVerseId) || [];
-                      return verseWords
-                        .filter(w => selectedWordIds.has(w.id))
-                        .map(w => (
-                          <span key={w.id}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-sm border cursor-pointer hover:opacity-70"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--primary) 10%, transparent)',
-                              borderColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
-                              color: 'var(--primary)',
-                            }}
-                            onClick={() => {
-                              setSelectedWordIds(prev => {
-                                const next = new Set(prev);
-                                next.delete(w.id);
-                                return next;
-                              });
-                            }}
-                          >
-                            <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>
-                              {w.text}
-                            </span>
-                            <span className="text-[10px] opacity-60">{decodeMorph(w.morph, bookInfo.language)}</span>
-                            <X className="w-3 h-3 opacity-50" />
-                          </span>
-                        ));
-                    })()}
-                  </div>
-                )}
-                <div className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
-                  Click words in the verse above to add/remove from selection
+              {/* Two-column layout for compact form */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Metaphor selection */}
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium mb-1">Metaphor</label>
+                  <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
+                    className="w-full p-2 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                    <option value="">— Select or create new —</option>
+                    {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                  {!selectedMetaphor && (
+                    <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
+                      placeholder="Or type a new metaphor name (e.g. GOD IS KING)"
+                      className="w-full p-2 border rounded-lg text-sm mt-2"
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                  )}
                 </div>
-              </div>
 
-              {/* Metaphor selection */}
-              <div>
-                <label className="block text-sm font-medium mb-2">Metaphor</label>
-                <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
-                  className="w-full p-2 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
-                  <option value="">— Select or create new —</option>
-                  {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-                {!selectedMetaphor && (
-                  <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
-                    placeholder="Or type a new metaphor name (e.g. GOD IS KING)"
-                    className="w-full p-2 border rounded-lg text-sm mt-2"
-                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-                )}
-              </div>
-
-              {/* Source / Target domains */}
-              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Source Domain</label>
                   <input type="text" value={sourceDomain} onChange={e => setSourceDomain(e.target.value)}
@@ -611,45 +565,41 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     placeholder="e.g. GOD" className="w-full p-2 border rounded-lg text-sm"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
-              </div>
 
-              {/* Linguistic evidence */}
-              <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Linguistic Evidence</label>
-                <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
-                  placeholder="Specific Hebrew/Greek words..." className="w-full p-2 border rounded-lg text-sm"
-                  style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-              </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Linguistic Evidence</label>
+                  <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
+                    placeholder="Specific words..." className="w-full p-2 border rounded-lg text-sm"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
+                  <div className="flex gap-2">
+                    {['draft', 'confirmed', 'disputed'].map(c => (
+                      <button key={c} onClick={() => setConfidence(c)}
+                        className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                        style={{
+                          backgroundColor: confidence === c ? `var(--${c})` : `color-mix(in srgb, var(--${c}) 10%, transparent)`,
+                          color: confidence === c ? '#fff' : `var(--${c})`,
+                          border: `1px solid color-mix(in srgb, var(--${c}) 40%, transparent)`,
+                        }}>
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              {/* Notes */}
-              <div>
-                <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-                  placeholder="Your analysis and observations..."
-                  className="w-full p-2 border rounded-lg text-sm resize-y"
-                  style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-              </div>
-
-              {/* Confidence */}
-              <div>
-                <label className="block text-xs font-medium mb-2" style={{ color: 'var(--muted)' }}>Confidence</label>
-                <div className="flex gap-2">
-                  {['draft', 'confirmed', 'disputed'].map(c => (
-                    <button key={c} onClick={() => setConfidence(c)}
-                      className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
-                      style={{
-                        backgroundColor: confidence === c ? `var(--${c})` : `color-mix(in srgb, var(--${c}) 10%, transparent)`,
-                        color: confidence === c ? '#fff' : `var(--${c})`,
-                        border: `1px solid color-mix(in srgb, var(--${c}) 40%, transparent)`,
-                      }}>
-                      {c}
-                    </button>
-                  ))}
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+                    placeholder="Your analysis and observations..."
+                    className="w-full p-2 border rounded-lg text-sm resize-y"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
               </div>
 
               {/* Actions */}
-              <div className="flex gap-3 pt-2">
+              <div className="flex gap-3 pt-1 pb-2">
                 <button onClick={handleSave}
                   className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-white text-sm"
                   style={{ backgroundColor: 'var(--primary)' }}>

@@ -73,36 +73,28 @@ async function downloadSBLGNT() {
 
 // --- Phase B: Parse and insert Hebrew OT ---
 
-interface WordData {
+interface SegmentData {
   text: string;
   lemma: string;
   morph: string;
-  segments: { text: string; lemma: string; morph: string }[];
 }
 
-function parseWLCWord(w: any): WordData | null {
+function parseWLCWord(w: any): SegmentData[] | null {
   const text = typeof w === 'string' ? w : (w['#text'] || '');
   if (!text) return null;
   const lemma = w['@_lemma'] || '';
   const morph = w['@_morph'] || '';
 
-  // Split by '/' into segments
+  // Split by '/' into individual segments (each becomes its own word row)
   const textParts = text.trim().split('/');
   const lemmaParts = lemma.split('/');
   const morphParts = morph.split('/');
 
-  const segments = textParts.map((t: string, i: number) => ({
+  return textParts.map((t: string, i: number) => ({
     text: t,
     lemma: lemmaParts[i] || '',
     morph: morphParts[i] || '',
   }));
-
-  return {
-    text: text.trim(),
-    lemma,
-    morph,
-    segments,
-  };
 }
 
 function parseWLC(db: Database.Database) {
@@ -119,12 +111,12 @@ function parseWLC(db: Database.Database) {
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
   const insertWord = db.prepare(
-    'INSERT OR IGNORE INTO words (verse_id, word_order, text, lemma, morph, segments) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph) VALUES (?, ?, ?, ?, ?, ?)'
   );
 
   const otBooks = BOOKS.filter(b => b.wlcFile);
   let totalVerses = 0;
-  let totalWords = 0;
+  let totalSegments = 0;
 
   const insertMany = db.transaction(() => {
     for (const book of otBooks) {
@@ -154,7 +146,7 @@ function parseWLC(db: Database.Database) {
 
       if (!Array.isArray(chapters)) chapters = [chapters];
       let bookVerseCount = 0;
-      let bookWordCount = 0;
+      let bookSegmentCount = 0;
 
       for (const chapter of chapters) {
         const chapterOsisID = chapter['@_osisID'] || '';
@@ -174,26 +166,28 @@ function parseWLC(db: Database.Database) {
           if (!wElements) continue;
           const wArr = Array.isArray(wElements) ? wElements : [wElements];
 
-          const wordDataList: WordData[] = [];
+          // Parse all words into segment lists
+          const wordSegments: SegmentData[][] = [];
           for (const w of wArr) {
-            const wd = parseWLCWord(w);
-            if (wd) wordDataList.push(wd);
+            const segs = parseWLCWord(w);
+            if (segs) wordSegments.push(segs);
           }
 
-          if (wordDataList.length === 0) continue;
+          if (wordSegments.length === 0) continue;
 
-          const verseText = wordDataList.map(w => w.text).join(' ');
+          const verseText = wordSegments.map(segs => segs.map(s => s.text).join('/')).join(' ');
           const result = insertVerse.run(book.id, chapterNum, verseNum, verseText);
           const verseId = result.lastInsertRowid as number;
 
           if (verseId) {
-            for (let i = 0; i < wordDataList.length; i++) {
-              const wd = wordDataList[i];
-              insertWord.run(
-                verseId, i + 1, wd.text, wd.lemma, wd.morph,
-                JSON.stringify(wd.segments)
-              );
-              bookWordCount++;
+            let order = 1;
+            for (let g = 0; g < wordSegments.length; g++) {
+              const segs = wordSegments[g];
+              for (const seg of segs) {
+                insertWord.run(verseId, order, g + 1, seg.text, seg.lemma, seg.morph);
+                order++;
+                bookSegmentCount++;
+              }
             }
           }
 
@@ -202,13 +196,13 @@ function parseWLC(db: Database.Database) {
       }
 
       totalVerses += bookVerseCount;
-      totalWords += bookWordCount;
-      console.log(`  ${book.name}: ${bookVerseCount} verses, ${bookWordCount} words`);
+      totalSegments += bookSegmentCount;
+      console.log(`  ${book.name}: ${bookVerseCount} verses, ${bookSegmentCount} segments`);
     }
   });
 
   insertMany();
-  console.log(`  Total Hebrew: ${totalVerses} verses, ${totalWords} words`);
+  console.log(`  Total Hebrew: ${totalVerses} verses, ${totalSegments} segments`);
 }
 
 // --- Phase C: Parse and insert Greek NT ---
@@ -220,7 +214,7 @@ function parseSBLGNT(db: Database.Database) {
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
   const insertWord = db.prepare(
-    'INSERT OR IGNORE INTO words (verse_id, word_order, text, lemma, morph, segments) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph) VALUES (?, ?, ?, ?, ?, ?)'
   );
 
   const ntBooks = BOOKS.filter(b => b.sblgntBook);
@@ -235,22 +229,18 @@ function parseSBLGNT(db: Database.Database) {
       const filePath = path.join(SBLGNT_DIR, files[0]);
       const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim());
 
-      // Group words by verse reference
       interface GkWord { text: string; word: string; lemma: string; pos: string; parsing: string; }
       const verseWords = new Map<string, GkWord[]>();
 
       for (const line of lines) {
-        // MorphGNT format: BBCCVV POS parsing text word normalized lemma
         const parts = line.split(/\s+/);
         if (parts.length < 7) continue;
-
         const ref = parts[0];
         const pos = parts[1];
         const parsing = parts[2];
         const text = parts[3];
         const word = parts[4];
         const lemma = parts[6];
-
         if (!verseWords.has(ref)) verseWords.set(ref, []);
         verseWords.get(ref)!.push({ text, word, lemma, pos, parsing });
       }
@@ -271,17 +261,9 @@ function parseSBLGNT(db: Database.Database) {
         if (verseId) {
           for (let i = 0; i < words.length; i++) {
             const w = words[i];
-            // Store morph as "POS|parsing" for Greek (decoded by morph.ts)
             const morph = `${w.pos}|${w.parsing}`;
-            const segments = [{
-              text: w.text,
-              lemma: w.lemma,
-              morph,
-            }];
-            insertWord.run(
-              verseId, i + 1, w.text, w.lemma, morph,
-              JSON.stringify(segments)
-            );
+            // Greek words are one segment each, word_group = word_order
+            insertWord.run(verseId, i + 1, i + 1, w.text, w.lemma, morph);
             bookWordCount++;
           }
         }
@@ -341,13 +323,13 @@ async function main() {
 
   // Print summary
   const verseCount = db.prepare('SELECT COUNT(*) as count FROM verses').get() as any;
-  const wordCount = db.prepare('SELECT COUNT(*) as count FROM words').get() as any;
+  const segmentCount = db.prepare('SELECT COUNT(*) as count FROM words').get() as any;
   const otCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('OT') as any;
   const ntCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('NT') as any;
 
   console.log('\n=== Seed Complete ===');
   console.log(`  Total verses: ${verseCount.count}`);
-  console.log(`  Total words: ${wordCount.count}`);
+  console.log(`  Total word segments: ${segmentCount.count}`);
   console.log(`  OT (Hebrew): ${otCount.count}`);
   console.log(`  NT (Greek): ${ntCount.count}`);
   console.log(`  Database size: ${(fs.statSync(DB_PATH).size / 1024 / 1024).toFixed(1)} MB`);

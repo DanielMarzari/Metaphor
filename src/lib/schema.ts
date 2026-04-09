@@ -27,10 +27,10 @@ export function initializeSchema(db: Database.Database) {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       verse_id    INTEGER NOT NULL REFERENCES verses(id),
       word_order  INTEGER NOT NULL,
+      word_group  INTEGER NOT NULL,
       text        TEXT NOT NULL,
       lemma       TEXT,
       morph       TEXT,
-      segments    TEXT,
       UNIQUE(verse_id, word_order)
     );
 
