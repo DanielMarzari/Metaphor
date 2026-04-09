@@ -13,6 +13,7 @@
   --accent-light: #daa520;
   --verse-bg: #fdfcf8;
   --draft: #d97706;
+  --provisional: #2563eb;
   --confirmed: #059669;
   --disputed: #dc2626;
 }
@@ -30,6 +31,7 @@
   --accent-light: #f0c040;
   --verse-bg: #16162a;
   --draft: #f59e0b;
+  --provisional: #60a5fa;
   --confirmed: #10b981;
   --disputed: #ef4444;
 }
@@ -47,6 +49,7 @@
   --color-accent-light: var(--accent-light);
   --color-verse-bg: var(--verse-bg);
   --color-draft: var(--draft);
+  --color-provisional: var(--provisional);
   --color-confirmed: var(--confirmed);
   --color-disputed: var(--disputed);
 }

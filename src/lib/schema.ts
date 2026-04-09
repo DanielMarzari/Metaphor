@@ -51,9 +51,10 @@ export function initializeSchema(db: Database.Database) {
       metaphor_id         INTEGER NOT NULL REFERENCES metaphors(id),
       source_domain       TEXT,
       target_domain       TEXT,
+      mapping             TEXT,
       notes               TEXT,
       confidence          TEXT NOT NULL DEFAULT 'draft'
-                            CHECK(confidence IN ('draft','confirmed','disputed')),
+                            CHECK(confidence IN ('draft','provisional','confirmed','disputed')),
       linguistic_evidence TEXT,
       created_at          TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at          TEXT NOT NULL DEFAULT (datetime('now'))

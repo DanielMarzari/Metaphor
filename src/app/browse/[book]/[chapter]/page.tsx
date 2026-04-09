@@ -16,7 +16,7 @@ interface Word {
 
 interface Annotation {
   id: number; verse_id: number; metaphor_id: number; metaphor_name: string;
-  source_domain: string; target_domain: string; notes: string;
+  source_domain: string; target_domain: string; mapping: string; notes: string;
   confidence: string; linguistic_evidence: string; metaphor_category: string;
   word_ids: number[];
 }
@@ -140,6 +140,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [newMetaphorName, setNewMetaphorName] = useState('');
   const [sourceDomain, setSourceDomain] = useState('');
   const [targetDomain, setTargetDomain] = useState('');
+  const [mapping, setMapping] = useState('');
   const [notes, setNotes] = useState('');
   const [confidence, setConfidence] = useState('draft');
   const [linguisticEvidence, setLinguisticEvidence] = useState('');
@@ -155,6 +156,25 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     });
     fetch('/api/metaphors').then(r => r.json()).then(setMetaphors);
   }, [bookAbbr, chapter]);
+
+  // Keyboard shortcut: Option+A to annotate
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        if (showPanel) {
+          closePanel();
+        } else if (selectionVerseId) {
+          openAnnotatePanel(selectionVerseId);
+        }
+      }
+      if (e.key === 'Escape' && showPanel) {
+        closePanel();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
 
   async function loadVerses(bookId: number, ch: number) {
     const res = await fetch(`/api/verses?book_id=${bookId}&chapter=${ch}`);
@@ -194,6 +214,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setSelectedMetaphor(annotation.metaphor_id);
       setSourceDomain(annotation.source_domain || '');
       setTargetDomain(annotation.target_domain || '');
+      setMapping(annotation.mapping || '');
       setNotes(annotation.notes || '');
       setConfidence(annotation.confidence);
       setLinguisticEvidence(annotation.linguistic_evidence || '');
@@ -214,6 +235,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setNewMetaphorName('');
     setSourceDomain('');
     setTargetDomain('');
+    setMapping('');
     setNotes('');
     setConfidence('draft');
     setLinguisticEvidence('');
@@ -276,6 +298,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       metaphor_id: metaphorId,
       source_domain: sourceDomain || undefined,
       target_domain: targetDomain || undefined,
+      mapping: mapping || undefined,
       notes: notes || undefined,
       confidence,
       linguistic_evidence: linguisticEvidence || undefined,
@@ -390,9 +413,17 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     words.map((word, idx) => {
                       const isSelected = selectedWordIds.has(word.id);
                       const highlightConf = highlightMap.get(word.id);
+                      const prevWord = words[idx - 1];
                       const nextWord = words[idx + 1];
-                      // Add space between word groups, not between segments within a group
+                      const sameGroupPrev = prevWord && prevWord.word_group === word.word_group;
+                      const sameGroupNext = nextWord && nextWord.word_group === word.word_group;
+                      // Space only between different word groups
                       const needsSpace = nextWord && nextWord.word_group !== word.word_group;
+                      // Rounded corners: round outer edges, flat inner edges within a group
+                      const borderRadius = sameGroupPrev && sameGroupNext ? '0'
+                        : sameGroupPrev ? (isHebrew ? '3px 0 0 3px' : '0 3px 3px 0')
+                        : sameGroupNext ? (isHebrew ? '0 3px 3px 0' : '3px 0 0 3px')
+                        : '3px';
                       return (
                         <span key={word.id}>
                           <span
@@ -402,8 +433,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                             className="word-token"
                             style={{
                               cursor: 'pointer',
-                              borderRadius: '3px',
-                              padding: '1px 2px',
+                              borderRadius,
+                              padding: '1px 1px',
                               display: 'inline',
                               transition: 'all 0.15s',
                               backgroundColor: isSelected
@@ -412,7 +443,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                                   ? `color-mix(in srgb, var(--${highlightConf}) 12%, transparent)`
                                   : 'transparent',
                               outline: isSelected ? '2px solid var(--primary)' : 'none',
-                              outlineOffset: '1px',
+                              outlineOffset: '0px',
                               textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
                               textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
                               textUnderlineOffset: '4px',
@@ -446,7 +477,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                   ))}
                   <button onClick={() => openAnnotatePanel(verse.id)}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-80"
-                    style={{ color: 'var(--primary)' }}>
+                    style={{ color: 'var(--primary)' }}
+                    title="Annotate (⌥A)">
                     <Plus className="w-3 h-3" /> Annotate
                   </button>
                 </div>
@@ -566,6 +598,14 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
 
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Mapping</label>
+                  <input type="text" value={mapping} onChange={e => setMapping(e.target.value)}
+                    placeholder="e.g. throne → authority, crown → sovereignty"
+                    className="w-full p-2 border rounded-lg text-sm"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                </div>
+
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Linguistic Evidence</label>
                   <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
@@ -574,8 +614,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
-                  <div className="flex gap-2">
-                    {['draft', 'confirmed', 'disputed'].map(c => (
+                  <div className="flex flex-wrap gap-2">
+                    {['draft', 'provisional', 'confirmed', 'disputed'].map(c => (
                       <button key={c} onClick={() => setConfidence(c)}
                         className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
                         style={{

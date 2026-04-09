@@ -161,6 +161,7 @@ export function createAnnotation(data: {
   metaphor_id: number;
   source_domain?: string;
   target_domain?: string;
+  mapping?: string;
   notes?: string;
   confidence?: string;
   linguistic_evidence?: string;
@@ -168,11 +169,12 @@ export function createAnnotation(data: {
 }) {
   const db = ensureSchema();
   const result = db.prepare(
-    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, notes, confidence, linguistic_evidence)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     data.verse_id, data.metaphor_id,
     data.source_domain || null, data.target_domain || null,
+    data.mapping || null,
     data.notes || null, data.confidence || 'draft',
     data.linguistic_evidence || null
   );
@@ -193,6 +195,7 @@ export function createAnnotation(data: {
 export function updateAnnotation(id: number, data: {
   source_domain?: string;
   target_domain?: string;
+  mapping?: string;
   notes?: string;
   confidence?: string;
   linguistic_evidence?: string;
@@ -205,6 +208,7 @@ export function updateAnnotation(id: number, data: {
   if (data.metaphor_id !== undefined) { sets.push('metaphor_id = ?'); values.push(data.metaphor_id); }
   if (data.source_domain !== undefined) { sets.push('source_domain = ?'); values.push(data.source_domain); }
   if (data.target_domain !== undefined) { sets.push('target_domain = ?'); values.push(data.target_domain); }
+  if (data.mapping !== undefined) { sets.push('mapping = ?'); values.push(data.mapping); }
   if (data.notes !== undefined) { sets.push('notes = ?'); values.push(data.notes); }
   if (data.confidence !== undefined) { sets.push('confidence = ?'); values.push(data.confidence); }
   if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
