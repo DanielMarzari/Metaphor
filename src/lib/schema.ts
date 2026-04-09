@@ -75,6 +75,62 @@ export function initializeSchema(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_aw_annotation ON annotation_words(annotation_id);
     CREATE INDEX IF NOT EXISTS idx_aw_word ON annotation_words(word_id);
+
+    -- Domain class hierarchy (OOP-style inheritance)
+    CREATE TABLE IF NOT EXISTS domain_classes (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL UNIQUE,
+      parent_id   INTEGER REFERENCES domain_classes(id) ON DELETE SET NULL,
+      description TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dc_parent ON domain_classes(parent_id);
+
+    -- Properties owned by a domain class (inherited by children at query time)
+    CREATE TABLE IF NOT EXISTS domain_properties (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain_class_id INTEGER NOT NULL REFERENCES domain_classes(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      description     TEXT,
+      UNIQUE(domain_class_id, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dp_class ON domain_properties(domain_class_id);
+
+    -- Metaphor nesting (many-to-many parent/child)
+    CREATE TABLE IF NOT EXISTS metaphor_nesting (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_id   INTEGER NOT NULL REFERENCES metaphors(id) ON DELETE CASCADE,
+      child_id    INTEGER NOT NULL REFERENCES metaphors(id) ON DELETE CASCADE,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(parent_id, child_id),
+      CHECK(parent_id != child_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mn_parent ON metaphor_nesting(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_mn_child ON metaphor_nesting(child_id);
+
+    -- Link metaphors to domain classes (source/target)
+    CREATE TABLE IF NOT EXISTS metaphor_domains (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      metaphor_id           INTEGER NOT NULL REFERENCES metaphors(id) ON DELETE CASCADE,
+      source_domain_id      INTEGER REFERENCES domain_classes(id) ON DELETE SET NULL,
+      target_domain_id      INTEGER REFERENCES domain_classes(id) ON DELETE SET NULL,
+      UNIQUE(metaphor_id)
+    );
+
+    -- Property mappings within a metaphor (e.g. HEAD → originRegion)
+    CREATE TABLE IF NOT EXISTS property_mappings (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      metaphor_id         INTEGER NOT NULL REFERENCES metaphors(id) ON DELETE CASCADE,
+      source_property_id  INTEGER REFERENCES domain_properties(id) ON DELETE CASCADE,
+      target_property_id  INTEGER REFERENCES domain_properties(id) ON DELETE CASCADE,
+      description         TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pm_metaphor ON property_mappings(metaphor_id);
   `);
 }
 

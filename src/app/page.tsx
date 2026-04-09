@@ -41,6 +41,7 @@ export default function DashboardPage() {
           <Link href="/browse" className="hover:underline" style={{ color: 'var(--primary)' }}>Browse</Link>
           <Link href="/search" className="hover:underline" style={{ color: 'var(--primary)' }}>Search</Link>
           <Link href="/metaphors" className="hover:underline" style={{ color: 'var(--primary)' }}>Metaphors</Link>
+          <Link href="/domains" className="hover:underline" style={{ color: 'var(--primary)' }}>Domains</Link>
           <Link href="/export" className="hover:underline" style={{ color: 'var(--primary)' }}>Export</Link>
         </nav>
       </header>

@@ -273,6 +273,217 @@ export function getDashboardStats() {
   return { totalVerses, totalMetaphors, totalAnnotations, byConfidence, recentAnnotations, topMetaphors };
 }
 
+// --- Domain Classes ---
+
+export function getDomainClasses() {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT dc.*, p.name as parent_name,
+            (SELECT COUNT(*) FROM domain_classes c WHERE c.parent_id = dc.id) as child_count,
+            (SELECT COUNT(*) FROM domain_properties dp WHERE dp.domain_class_id = dc.id) as property_count
+     FROM domain_classes dc
+     LEFT JOIN domain_classes p ON dc.parent_id = p.id
+     ORDER BY dc.name`
+  ).all();
+}
+
+export function getDomainClassById(id: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT dc.*, p.name as parent_name
+     FROM domain_classes dc
+     LEFT JOIN domain_classes p ON dc.parent_id = p.id
+     WHERE dc.id = ?`
+  ).get(id);
+}
+
+export function getDomainClassAncestors(id: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `WITH RECURSIVE ancestors(id, name, parent_id, depth) AS (
+       SELECT id, name, parent_id, 0 FROM domain_classes WHERE id = ?
+       UNION ALL
+       SELECT dc.id, dc.name, dc.parent_id, a.depth + 1
+       FROM domain_classes dc JOIN ancestors a ON dc.id = a.parent_id
+     )
+     SELECT * FROM ancestors ORDER BY depth DESC`
+  ).all(id);
+}
+
+export function getDomainClassChildren(id: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    'SELECT * FROM domain_classes WHERE parent_id = ? ORDER BY name'
+  ).all(id);
+}
+
+export function createDomainClass(name: string, parentId?: number, description?: string) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT INTO domain_classes (name, parent_id, description) VALUES (?, ?, ?)'
+  ).run(name, parentId || null, description || null);
+}
+
+export function updateDomainClass(id: number, data: { name?: string; parent_id?: number | null; description?: string }) {
+  const db = ensureSchema();
+  const sets: string[] = [];
+  const values: any[] = [];
+  if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
+  if (data.parent_id !== undefined) { sets.push('parent_id = ?'); values.push(data.parent_id); }
+  if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  return db.prepare(`UPDATE domain_classes SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function deleteDomainClass(id: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM domain_classes WHERE id = ?').run(id);
+}
+
+// --- Domain Properties ---
+
+export function getDomainProperties(classId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    'SELECT * FROM domain_properties WHERE domain_class_id = ? ORDER BY name'
+  ).all(classId);
+}
+
+export function getInheritedProperties(classId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `WITH RECURSIVE ancestors(id, name, parent_id, depth) AS (
+       SELECT id, name, parent_id, 0 FROM domain_classes WHERE id = ?
+       UNION ALL
+       SELECT dc.id, dc.name, dc.parent_id, a.depth + 1
+       FROM domain_classes dc JOIN ancestors a ON dc.id = a.parent_id
+     )
+     SELECT dp.*, a.name as owner_class, a.id as owner_class_id, a.depth
+     FROM ancestors a
+     JOIN domain_properties dp ON dp.domain_class_id = a.id
+     ORDER BY a.depth DESC, dp.name`
+  ).all(classId);
+}
+
+export function createDomainProperty(classId: number, name: string, description?: string) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT INTO domain_properties (domain_class_id, name, description) VALUES (?, ?, ?)'
+  ).run(classId, name, description || null);
+}
+
+export function updateDomainProperty(id: number, data: { name?: string; description?: string }) {
+  const db = ensureSchema();
+  const sets: string[] = [];
+  const values: any[] = [];
+  if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
+  if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
+  values.push(id);
+  return db.prepare(`UPDATE domain_properties SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function deleteDomainProperty(id: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM domain_properties WHERE id = ?').run(id);
+}
+
+// --- Metaphor Nesting ---
+
+export function getMetaphorChildren(parentId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT m.*, mn.sort_order, COUNT(vm.id) as usage_count
+     FROM metaphor_nesting mn
+     JOIN metaphors m ON mn.child_id = m.id
+     LEFT JOIN verse_metaphors vm ON vm.metaphor_id = m.id
+     WHERE mn.parent_id = ?
+     GROUP BY m.id
+     ORDER BY mn.sort_order, m.name`
+  ).all(parentId);
+}
+
+export function getMetaphorParents(childId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT m.*
+     FROM metaphor_nesting mn
+     JOIN metaphors m ON mn.parent_id = m.id
+     WHERE mn.child_id = ?
+     ORDER BY m.name`
+  ).all(childId);
+}
+
+export function addMetaphorNesting(parentId: number, childId: number, sortOrder = 0) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT OR IGNORE INTO metaphor_nesting (parent_id, child_id, sort_order) VALUES (?, ?, ?)'
+  ).run(parentId, childId, sortOrder);
+}
+
+export function removeMetaphorNesting(parentId: number, childId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    'DELETE FROM metaphor_nesting WHERE parent_id = ? AND child_id = ?'
+  ).run(parentId, childId);
+}
+
+// --- Metaphor Domains ---
+
+export function getMetaphorDomains(metaphorId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT md.*,
+            s.name as source_domain_name, t.name as target_domain_name
+     FROM metaphor_domains md
+     LEFT JOIN domain_classes s ON md.source_domain_id = s.id
+     LEFT JOIN domain_classes t ON md.target_domain_id = t.id
+     WHERE md.metaphor_id = ?`
+  ).get(metaphorId);
+}
+
+export function setMetaphorDomains(metaphorId: number, sourceDomainId?: number, targetDomainId?: number) {
+  const db = ensureSchema();
+  const existing = db.prepare('SELECT id FROM metaphor_domains WHERE metaphor_id = ?').get(metaphorId);
+  if (existing) {
+    return db.prepare(
+      'UPDATE metaphor_domains SET source_domain_id = ?, target_domain_id = ? WHERE metaphor_id = ?'
+    ).run(sourceDomainId || null, targetDomainId || null, metaphorId);
+  }
+  return db.prepare(
+    'INSERT INTO metaphor_domains (metaphor_id, source_domain_id, target_domain_id) VALUES (?, ?, ?)'
+  ).run(metaphorId, sourceDomainId || null, targetDomainId || null);
+}
+
+// --- Property Mappings ---
+
+export function getPropertyMappings(metaphorId: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT pm.*,
+            sp.name as source_property_name, tp.name as target_property_name,
+            sc.name as source_class_name, tc.name as target_class_name
+     FROM property_mappings pm
+     LEFT JOIN domain_properties sp ON pm.source_property_id = sp.id
+     LEFT JOIN domain_properties tp ON pm.target_property_id = tp.id
+     LEFT JOIN domain_classes sc ON sp.domain_class_id = sc.id
+     LEFT JOIN domain_classes tc ON tp.domain_class_id = tc.id
+     WHERE pm.metaphor_id = ?`
+  ).all(metaphorId);
+}
+
+export function createPropertyMapping(metaphorId: number, sourcePropId: number, targetPropId: number, description?: string) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT INTO property_mappings (metaphor_id, source_property_id, target_property_id, description) VALUES (?, ?, ?, ?)'
+  ).run(metaphorId, sourcePropId, targetPropId, description || null);
+}
+
+export function deletePropertyMapping(id: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM property_mappings WHERE id = ?').run(id);
+}
+
 // --- Export ---
 
 export function getExportData(filters?: { book_id?: number; metaphor_id?: number; confidence?: string }) {
