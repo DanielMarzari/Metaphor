@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     if (!body.name?.trim()) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
-    const result = createMetaphor(body.name.trim().toUpperCase(), body.description, body.category);
+    const result = createMetaphor(body.name.trim().toUpperCase(), body.description, body.category, body.metaphor_type);
     return NextResponse.json({ id: result.lastInsertRowid, name: body.name.trim().toUpperCase() }, { status: 201 });
   } catch (error: any) {
     if (error?.message?.includes('UNIQUE')) {

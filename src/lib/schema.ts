@@ -37,12 +37,14 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_words_verse ON words(verse_id);
 
     CREATE TABLE IF NOT EXISTS metaphors (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      name        TEXT NOT NULL UNIQUE,
-      description TEXT,
-      category    TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      name           TEXT NOT NULL UNIQUE,
+      description    TEXT,
+      category       TEXT,
+      metaphor_type  TEXT DEFAULT 'conceptual'
+                       CHECK(metaphor_type IN ('conceptual','lexical')),
+      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS verse_metaphors (

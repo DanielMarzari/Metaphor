@@ -2,16 +2,19 @@
 
 import { useState, useEffect, use } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ChevronLeft, Tag, Edit3, Save, Trash2, X } from 'lucide-react';
 
 export default function MetaphorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const [metaphor, setMetaphor] = useState<any>(null);
   const [annotations, setAnnotations] = useState<any[]>([]);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
+  const [metaphorType, setMetaphorType] = useState('conceptual');
 
   useEffect(() => {
     loadData();
@@ -23,8 +26,8 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
       const m = await mRes.json();
       setMetaphor(m);
       setName(m.name); setDescription(m.description || ''); setCategory(m.category || '');
+      setMetaphorType(m.metaphor_type || 'conceptual');
     }
-    // Load annotations through a special query param
     const aRes = await fetch(`/api/verse-metaphors?metaphor_id=${id}`);
     if (aRes.ok) setAnnotations(await aRes.json());
   }
@@ -33,10 +36,29 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
     await fetch(`/api/metaphors/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, category }),
+      body: JSON.stringify({ name, description, category, metaphor_type: metaphorType }),
     });
     setEditing(false);
     loadData();
+  }
+
+  async function handleDelete() {
+    const msg = annotations.length > 0
+      ? `This metaphor has ${annotations.length} annotation(s). Delete the metaphor and all annotations?`
+      : 'Delete this metaphor?';
+    if (!confirm(msg)) return;
+
+    // Delete all annotations first
+    for (const a of annotations) {
+      await fetch(`/api/verse-metaphors/${a.id}`, { method: 'DELETE' });
+    }
+    const res = await fetch(`/api/metaphors/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      router.push('/metaphors');
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Failed to delete');
+    }
   }
 
   if (!metaphor) return <div className="min-h-screen flex items-center justify-center" style={{ color: 'var(--muted)' }}>Loading...</div>;
@@ -48,10 +70,23 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
           <Link href="/metaphors" className="hover:opacity-70"><ChevronLeft className="w-5 h-5" /></Link>
           <Tag className="w-5 h-5" style={{ color: 'var(--accent)' }} />
           <h1 className="text-lg font-bold">{metaphor.name}</h1>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wide font-medium"
+            style={{
+              backgroundColor: metaphor.metaphor_type === 'lexical' ? 'color-mix(in srgb, var(--provisional) 15%, transparent)' : 'var(--surface-2)',
+              color: metaphor.metaphor_type === 'lexical' ? 'var(--provisional)' : 'var(--muted)',
+            }}>
+            {metaphor.metaphor_type || 'conceptual'}
+          </span>
         </div>
-        <button onClick={() => setEditing(!editing)} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-          {editing ? <X className="w-4 h-4" /> : <Edit3 className="w-4 h-4" />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditing(!editing)} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+            {editing ? <X className="w-4 h-4" /> : <Edit3 className="w-4 h-4" />}
+          </button>
+          <button onClick={handleDelete} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--disputed)' }}
+            title="Delete metaphor">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-8">
@@ -64,10 +99,25 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
               placeholder="Description..."
               className="w-full p-2 border rounded-lg text-sm mb-3"
               style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-            <input value={category} onChange={e => setCategory(e.target.value)}
-              placeholder="Category..."
-              className="w-full p-2 border rounded-lg text-sm mb-3"
-              style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <input value={category} onChange={e => setCategory(e.target.value)}
+                placeholder="Category..."
+                className="w-full p-2 border rounded-lg text-sm"
+                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+              <div className="flex gap-2">
+                {['conceptual', 'lexical'].map(t => (
+                  <button key={t} type="button" onClick={() => setMetaphorType(t)}
+                    className="flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border"
+                    style={{
+                      backgroundColor: metaphorType === t ? 'var(--primary)' : 'var(--background)',
+                      color: metaphorType === t ? '#fff' : 'var(--muted)',
+                      borderColor: metaphorType === t ? 'var(--primary)' : 'var(--border)',
+                    }}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
             <button onClick={handleSave} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: 'var(--primary)' }}>
               <Save className="w-4 h-4" /> Save
             </button>
@@ -101,6 +151,7 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
                   {a.source_domain} → {a.target_domain}
                 </p>
               )}
+              {a.mapping && <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>Mapping: {a.mapping}</p>}
               {a.notes && <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{a.notes}</p>}
             </Link>
           ))}

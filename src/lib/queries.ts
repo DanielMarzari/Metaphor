@@ -71,20 +71,21 @@ export function getMetaphorById(id: number) {
   return db.prepare('SELECT * FROM metaphors WHERE id = ?').get(id);
 }
 
-export function createMetaphor(name: string, description?: string, category?: string) {
+export function createMetaphor(name: string, description?: string, category?: string, metaphor_type?: string) {
   const db = ensureSchema();
   return db.prepare(
-    'INSERT INTO metaphors (name, description, category) VALUES (?, ?, ?)'
-  ).run(name, description || null, category || null);
+    'INSERT INTO metaphors (name, description, category, metaphor_type) VALUES (?, ?, ?, ?)'
+  ).run(name, description || null, category || null, metaphor_type || 'conceptual');
 }
 
-export function updateMetaphor(id: number, data: { name?: string; description?: string; category?: string }) {
+export function updateMetaphor(id: number, data: { name?: string; description?: string; category?: string; metaphor_type?: string }) {
   const db = ensureSchema();
   const sets: string[] = [];
   const values: any[] = [];
   if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
   if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
   if (data.category !== undefined) { sets.push('category = ?'); values.push(data.category); }
+  if (data.metaphor_type !== undefined) { sets.push('metaphor_type = ?'); values.push(data.metaphor_type); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   return db.prepare(`UPDATE metaphors SET ${sets.join(', ')} WHERE id = ?`).run(...values);
