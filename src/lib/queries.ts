@@ -272,7 +272,7 @@ export function getWordAnnotationByLemma(lemma: string, language: string) {
 export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
   const db = ensureSchema();
   return db.prepare(
-    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs
+    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs, wa.semantic_domain
      FROM words w
      JOIN verses v ON w.verse_id = v.id
      JOIN word_annotations wa ON w.lemma = wa.lemma
@@ -281,20 +281,21 @@ export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
   ).all(bookId, chapter);
 }
 
-export function createWordAnnotation(data: { lemma: string; language: string; strongs?: string; gloss?: string; notes?: string }) {
+export function createWordAnnotation(data: { lemma: string; language: string; strongs?: string; gloss?: string; notes?: string; semantic_domain?: string }) {
   const db = ensureSchema();
   return db.prepare(
-    'INSERT OR IGNORE INTO word_annotations (lemma, language, strongs, gloss, notes) VALUES (?, ?, ?, ?, ?)'
-  ).run(data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null);
+    'INSERT OR IGNORE INTO word_annotations (lemma, language, strongs, gloss, notes, semantic_domain) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null, data.semantic_domain || null);
 }
 
-export function updateWordAnnotation(id: number, data: { gloss?: string; notes?: string; strongs?: string }) {
+export function updateWordAnnotation(id: number, data: { gloss?: string; notes?: string; strongs?: string; semantic_domain?: string }) {
   const db = ensureSchema();
   const sets: string[] = [];
   const values: any[] = [];
   if (data.gloss !== undefined) { sets.push('gloss = ?'); values.push(data.gloss); }
   if (data.notes !== undefined) { sets.push('notes = ?'); values.push(data.notes); }
   if (data.strongs !== undefined) { sets.push('strongs = ?'); values.push(data.strongs); }
+  if (data.semantic_domain !== undefined) { sets.push('semantic_domain = ?'); values.push(data.semantic_domain); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   return db.prepare(`UPDATE word_annotations SET ${sets.join(', ')} WHERE id = ?`).run(...values);

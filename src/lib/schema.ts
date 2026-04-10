@@ -195,6 +195,7 @@ function runMigrations(db: Database.Database) {
     { table: 'verses', column: 'completed', definition: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'words', column: 'strongs', definition: 'TEXT' },
     { table: 'words', column: 'root_consonants', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'semantic_domain', definition: 'TEXT' },
   ];
 
   for (const m of migrations) {

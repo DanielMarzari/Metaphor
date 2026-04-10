@@ -3,6 +3,7 @@
 import { useState, useEffect, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen, CheckCircle, Circle, Edit2 } from 'lucide-react';
+import { decodeMorph } from '@/lib/morph-decoder';
 
 interface Verse {
   id: number; book_id: number; chapter: number; verse: number;
@@ -23,95 +24,6 @@ interface Annotation {
 
 interface Metaphor {
   id: number; name: string; description: string; category: string; usage_count: number;
-}
-
-// --- Morph decoder (client-side) ---
-
-const HEB_VERB_STEM: Record<string, string> = {
-  q: 'Qal', N: 'Niphal', p: 'Piel', P: 'Pual', h: 'Hiphil',
-  H: 'Hophal', t: 'Hithpael', o: 'Polel', O: 'Polal', r: 'Hithpolel',
-  m: 'Poel', M: 'Poal', k: 'Palel', K: 'Pulal', Q: 'Qal Passive',
-  l: 'Pilpel', L: 'Polpal', f: 'Hithpalpel', D: 'Nithpael',
-};
-const HEB_VERB_TYPE: Record<string, string> = {
-  p: 'Perf', q: 'Seq Perf', i: 'Impf', w: 'Seq Impf',
-  h: 'Cohort', j: 'Juss', v: 'Impv',
-  r: 'Ptcp Act', s: 'Ptcp Pass', a: 'Inf Abs', c: 'Inf Cst',
-};
-const HEB_PERSON: Record<string, string> = { '1': '1st', '2': '2nd', '3': '3rd' };
-const HEB_GENDER: Record<string, string> = { m: 'Masc', f: 'Fem', c: 'Com', b: 'Both' };
-const HEB_NUMBER: Record<string, string> = { s: 'Sg', p: 'Pl', d: 'Du' };
-const HEB_STATE: Record<string, string> = { a: 'Abs', c: 'Cst', d: 'Det' };
-const HEB_NOUN_TYPE: Record<string, string> = { c: 'Common', p: 'Proper' };
-const HEB_PARTICLE_TYPE: Record<string, string> = {
-  a: 'Affirm', d: 'Article', e: 'Exhort', i: 'Interrog',
-  j: 'Interj', m: 'Demonstr', n: 'Neg', o: 'Obj Marker', r: 'Relative',
-};
-const HEB_POS_SHORT: Record<string, string> = {
-  A: 'Adj', C: 'Conj', D: 'Adv', N: 'Noun', P: 'Pron', R: 'Prep', S: 'Suf', T: 'Part', V: 'Verb',
-};
-const HEB_PRONOUN_TYPE: Record<string, string> = { d: 'Dem', f: 'Indef', i: 'Interrog', p: 'Pers', r: 'Rel' };
-const HEB_SUFFIX_TYPE: Record<string, string> = { d: 'Dir He', h: 'Parag He', n: 'Parag Nun', p: 'Pronom' };
-
-function decodeHebrew(morph: string): string {
-  if (!morph) return '';
-  let code = morph;
-  let lang = '';
-  if (code.startsWith('H')) code = code.slice(1);
-  else if (code.startsWith('A')) { lang = 'Aram '; code = code.slice(1); }
-  const pos = code[0];
-  const rest = code.slice(1);
-  if (pos === 'V') {
-    return [lang + 'Verb', HEB_VERB_STEM[rest[0]] || rest[0], HEB_VERB_TYPE[rest[1]] || rest[1],
-      HEB_PERSON[rest[2]] || '', HEB_GENDER[rest[3]] || '', HEB_NUMBER[rest[4]] || ''].filter(Boolean).join(' ');
-  }
-  if (pos === 'N') {
-    return [lang + 'Noun', HEB_NOUN_TYPE[rest[0]] || '', HEB_GENDER[rest[1]] || '',
-      HEB_NUMBER[rest[2]] || '', HEB_STATE[rest[3]] || ''].filter(Boolean).join(' ');
-  }
-  if (pos === 'T') return [lang + 'Part', HEB_PARTICLE_TYPE[rest[0]] || ''].filter(Boolean).join(' ');
-  if (pos === 'P') return [lang + 'Pron', HEB_PRONOUN_TYPE[rest[0]] || '', HEB_PERSON[rest[1]] || '',
-    HEB_GENDER[rest[2]] || '', HEB_NUMBER[rest[3]] || ''].filter(Boolean).join(' ');
-  if (pos === 'S') return [lang + 'Suf', HEB_SUFFIX_TYPE[rest[0]] || '', HEB_PERSON[rest[1]] || '',
-    HEB_GENDER[rest[2]] || '', HEB_NUMBER[rest[3]] || ''].filter(Boolean).join(' ');
-  if (pos === 'A') return [lang + 'Adj', HEB_GENDER[rest[1]] || '', HEB_NUMBER[rest[2]] || '',
-    HEB_STATE[rest[3]] || ''].filter(Boolean).join(' ');
-  return lang + (HEB_POS_SHORT[pos] || morph);
-}
-
-const GK_POS: Record<string, string> = {
-  'N-': 'Noun', 'V-': 'Verb', 'RA': 'Art', 'C-': 'Conj', 'RP': 'Pers Pron',
-  'RR': 'Rel Pron', 'RD': 'Dem Pron', 'RI': 'Interrog Pron', 'RX': 'Indef Pron',
-  'A-': 'Adj', 'D-': 'Adv', 'P-': 'Prep', 'X-': 'Part', 'I-': 'Interj',
-};
-const GK_TENSE: Record<string, string> = { P: 'Pres', I: 'Impf', F: 'Fut', A: 'Aor', X: 'Perf', Y: 'Plupf' };
-const GK_VOICE: Record<string, string> = { A: 'Act', M: 'Mid', P: 'Pass' };
-const GK_MOOD: Record<string, string> = { I: 'Ind', D: 'Impv', S: 'Subj', O: 'Opt', N: 'Inf', P: 'Ptcp' };
-const GK_CASE: Record<string, string> = { N: 'Nom', G: 'Gen', D: 'Dat', A: 'Acc', V: 'Voc' };
-const GK_NUMBER_MAP: Record<string, string> = { S: 'Sg', P: 'Pl' };
-const GK_GENDER_MAP: Record<string, string> = { M: 'Masc', F: 'Fem', N: 'Neut' };
-
-function decodeGreek(morph: string): string {
-  if (!morph) return '';
-  const [pos, parsing] = morph.split('|');
-  const posName = GK_POS[pos] || pos;
-  if (pos === 'V-' && parsing) {
-    const mood = GK_MOOD[parsing[3]] || '';
-    if (mood === 'Ptcp') return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood,
-      GK_CASE[parsing[4]] || '', GK_NUMBER_MAP[parsing[5]] || '', GK_GENDER_MAP[parsing[6]] || ''].filter(Boolean).join(' ');
-    if (mood === 'Inf') return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood].filter(Boolean).join(' ');
-    return ['Verb', GK_TENSE[parsing[1]] || '', GK_VOICE[parsing[2]] || '', mood,
-      HEB_PERSON[parsing[0]] || '', GK_NUMBER_MAP[parsing[5]] || ''].filter(Boolean).join(' ');
-  }
-  if (parsing) {
-    return [posName, GK_CASE[parsing[4]] || '', GK_NUMBER_MAP[parsing[5]] || '',
-      GK_GENDER_MAP[parsing[6]] || ''].filter(Boolean).join(' ');
-  }
-  return posName;
-}
-
-function decodeMorph(morph: string, language: string): string {
-  return language === 'hebrew' ? decodeHebrew(morph) : decodeGreek(morph);
 }
 
 // --- Component ---
@@ -151,9 +63,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [completedVerses, setCompletedVerses] = useState<Set<number>>(new Set());
 
   // Word annotations (lemma-level)
-  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>>(new Map());
+  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>>(new Map());
   const [wordInfoWord, setWordInfoWord] = useState<{ word: Word; x: number; y: number } | null>(null);
-  const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string } | null>(null);
+  const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string; semantic_domain: string } | null>(null);
   const wordInfoRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -239,8 +151,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     // Fetch annotated lemmas for this chapter
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookId}&chapter=${ch}`);
-      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
-      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
+      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }[] = await waRes.json();
+      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>();
       for (const al of annotatedLemmaData) {
         annotatedLemmaMap.set(al.lemma, al);
       }
@@ -415,8 +327,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     if (!bookInfo) return;
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookInfo.id}&chapter=${chapter}`);
-      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
-      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
+      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }[] = await waRes.json();
+      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>();
       for (const al of data) map.set(al.lemma, al);
       setAnnotatedLemmas(map);
     } catch {}
@@ -425,15 +337,14 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   async function handleWordAnnotationSave(word: Word) {
     if (!wordAnnotationForm || !word.lemma) return;
     const existing = annotatedLemmas.get(word.lemma);
+    const payload = { gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes, semantic_domain: wordAnnotationForm.semantic_domain };
     if (existing) {
-      // Update
       await fetch(`/api/word-annotations/${existing.annotation_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes }),
+        body: JSON.stringify(payload),
       });
     } else {
-      // Create
       await fetch('/api/word-annotations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -441,8 +352,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
           lemma: word.lemma,
           language: bookInfo.language,
           strongs: word.strongs || '',
-          gloss: wordAnnotationForm.gloss,
-          notes: wordAnnotationForm.notes,
+          ...payload,
         }),
       });
     }
@@ -727,6 +637,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               // Inline annotation form
               return (
                 <div className="space-y-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--provisional)' }}>
+                    Word Annotation
+                  </div>
                   <div>
                     <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Gloss</label>
                     <input type="text" value={wordAnnotationForm.gloss}
@@ -737,13 +650,21 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                       autoFocus />
                   </div>
                   <div>
+                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Semantic Domain</label>
+                    <input type="text" value={wordAnnotationForm.semantic_domain}
+                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, semantic_domain: e.target.value } : prev)}
+                      placeholder="e.g. Creation, Kingship, Body..."
+                      className="w-full p-1.5 border rounded text-sm"
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                  </div>
+                  <div>
                     <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Notes</label>
                     <textarea value={wordAnnotationForm.notes}
                       onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, notes: e.target.value } : prev)}
-                      placeholder="Semantic range, usage notes..."
-                      rows={3}
+                      placeholder="Semantic range, usage patterns, etymological notes, metaphor relevance..."
+                      rows={4}
                       className="w-full p-1.5 border rounded text-xs resize-y"
-                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '80px' }} />
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => handleWordAnnotationSave(wordInfoWord.word)}
@@ -769,13 +690,18 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     Word Annotation
                   </div>
                   {existing.gloss && (
-                    <div className="text-sm font-medium mb-1">{existing.gloss}</div>
+                    <div className="text-sm font-medium mb-0.5">{existing.gloss}</div>
+                  )}
+                  {existing.semantic_domain && (
+                    <div className="text-xs mb-0.5" style={{ color: 'var(--accent)' }}>
+                      <span className="font-medium">Domain:</span> {existing.semantic_domain}
+                    </div>
                   )}
                   {existing.notes && (
-                    <div className="text-xs mb-2" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
+                    <div className="text-xs mb-2 whitespace-pre-wrap" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
                   )}
                   <div className="flex gap-2">
-                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '' })}
+                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '', semantic_domain: existing.semantic_domain || '' })}
                       className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
                       style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}>
                       <Edit2 className="w-3 h-3" /> Edit
@@ -793,7 +719,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
             // No annotation yet — show annotate button
             if (wordInfoWord.word.lemma) {
               return (
-                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '' })}
+                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '', semantic_domain: '' })}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center hover:opacity-80 transition-opacity"
                   style={{
                     backgroundColor: 'color-mix(in srgb, var(--provisional) 10%, transparent)',
