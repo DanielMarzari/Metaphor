@@ -58,6 +58,7 @@ export function initializeSchema(db: Database.Database) {
       confidence          TEXT NOT NULL DEFAULT 'draft'
                             CHECK(confidence IN ('draft','provisional','confirmed','disputed')),
       linguistic_evidence TEXT,
+      pseudocode      TEXT,
       created_at          TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
     );

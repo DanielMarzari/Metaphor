@@ -17,8 +17,8 @@ interface Word {
 interface Annotation {
   id: number; verse_id: number; metaphor_id: number; metaphor_name: string;
   source_domain: string; target_domain: string; mapping: string; notes: string;
-  confidence: string; linguistic_evidence: string; metaphor_category: string;
-  word_ids: number[];
+  pseudocode: string; confidence: string; linguistic_evidence: string;
+  metaphor_category: string; word_ids: number[];
 }
 
 interface Metaphor {
@@ -142,6 +142,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [targetDomain, setTargetDomain] = useState('');
   const [mapping, setMapping] = useState('');
   const [notes, setNotes] = useState('');
+  const [pseudocode, setPseudocode] = useState('');
   const [confidence, setConfidence] = useState('draft');
   const [linguisticEvidence, setLinguisticEvidence] = useState('');
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
@@ -216,6 +217,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setTargetDomain(annotation.target_domain || '');
       setMapping(annotation.mapping || '');
       setNotes(annotation.notes || '');
+      setPseudocode(annotation.pseudocode || '');
       setConfidence(annotation.confidence);
       setLinguisticEvidence(annotation.linguistic_evidence || '');
       setSelectedWordIds(new Set(annotation.word_ids || []));
@@ -237,6 +239,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setTargetDomain('');
     setMapping('');
     setNotes('');
+    setPseudocode('');
     setConfidence('draft');
     setLinguisticEvidence('');
   }
@@ -300,6 +303,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       target_domain: targetDomain || undefined,
       mapping: mapping || undefined,
       notes: notes || undefined,
+      pseudocode: pseudocode || undefined,
       confidence,
       linguistic_evidence: linguisticEvidence || undefined,
       word_ids: Array.from(selectedWordIds),
@@ -567,74 +571,84 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                 </div>
               )}
 
-              {/* Two-column layout for compact form */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Metaphor selection */}
+              {/* Compact top row: metaphor + domains + confidence */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium mb-1">Metaphor</label>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Metaphor</label>
                   <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
-                    className="w-full p-2 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                    className="w-full p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
                     <option value="">— Select or create new —</option>
                     {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                   </select>
                   {!selectedMetaphor && (
                     <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
-                      placeholder="Or type a new metaphor name (e.g. GOD IS KING)"
-                      className="w-full p-2 border rounded-lg text-sm mt-2"
+                      placeholder="New metaphor name (e.g. GOD IS KING)"
+                      className="w-full p-1.5 border rounded-lg text-sm mt-1.5"
                       style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                   )}
                 </div>
-
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Source Domain</label>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Source</label>
                   <input type="text" value={sourceDomain} onChange={e => setSourceDomain(e.target.value)}
-                    placeholder="e.g. KING" className="w-full p-2 border rounded-lg text-sm"
+                    placeholder="KING" className="w-full p-1.5 border rounded-lg text-sm"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Target Domain</label>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Target</label>
                   <input type="text" value={targetDomain} onChange={e => setTargetDomain(e.target.value)}
-                    placeholder="e.g. GOD" className="w-full p-2 border rounded-lg text-sm"
+                    placeholder="GOD" className="w-full p-1.5 border rounded-lg text-sm"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
+              </div>
 
+              {/* Second compact row: mapping + evidence + confidence */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Mapping</label>
                   <input type="text" value={mapping} onChange={e => setMapping(e.target.value)}
-                    placeholder="e.g. throne → authority, crown → sovereignty"
-                    className="w-full p-2 border rounded-lg text-sm"
+                    placeholder="throne → authority, crown → sovereignty"
+                    className="w-full p-1.5 border rounded-lg text-sm"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Linguistic Evidence</label>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Evidence</label>
                   <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
-                    placeholder="Specific words..." className="w-full p-2 border rounded-lg text-sm"
+                    placeholder="Specific words..." className="w-full p-1.5 border rounded-lg text-sm"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1">
                     {['draft', 'provisional', 'confirmed', 'disputed'].map(c => (
                       <button key={c} onClick={() => setConfidence(c)}
-                        className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                        className="px-2 py-1 rounded-full text-[10px] font-medium transition-all"
                         style={{
                           backgroundColor: confidence === c ? `var(--${c})` : `color-mix(in srgb, var(--${c}) 10%, transparent)`,
                           color: confidence === c ? '#fff' : `var(--${c})`,
                           border: `1px solid color-mix(in srgb, var(--${c}) 40%, transparent)`,
                         }}>
-                        {c}
+                        {c.slice(0, 4)}
                       </button>
                     ))}
                   </div>
                 </div>
+              </div>
 
-                <div className="sm:col-span-2">
+              {/* Notes + Pseudocode side by side */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
-                    placeholder="Your analysis and observations..."
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={8}
+                    placeholder="Analysis, observations, cross-references..."
                     className="w-full p-2 border rounded-lg text-sm resize-y"
-                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '160px' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Pseudocode</label>
+                  <textarea value={pseudocode} onChange={e => setPseudocode(e.target.value)} rows={8}
+                    placeholder={"class TEMPORAL_CONTAINER extends CONTAINER\n  .originRegion = HEAD\n  בְּרֵאשִׁית instanceof TEMPORAL_CONTAINER\n  HEAD_IS_ORIGIN → .originRegion"}
+                    className="w-full p-2 border rounded-lg text-xs resize-y font-mono"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '160px', lineHeight: '1.6' }} />
                 </div>
               </div>
 

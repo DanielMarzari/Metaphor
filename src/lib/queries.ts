@@ -166,18 +166,19 @@ export function createAnnotation(data: {
   notes?: string;
   confidence?: string;
   linguistic_evidence?: string;
+  pseudocode?: string;
   word_ids?: number[];
 }) {
   const db = ensureSchema();
   const result = db.prepare(
-    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     data.verse_id, data.metaphor_id,
     data.source_domain || null, data.target_domain || null,
     data.mapping || null,
     data.notes || null, data.confidence || 'draft',
-    data.linguistic_evidence || null
+    data.linguistic_evidence || null, data.pseudocode || null
   );
 
   // Link selected words
@@ -200,6 +201,7 @@ export function updateAnnotation(id: number, data: {
   notes?: string;
   confidence?: string;
   linguistic_evidence?: string;
+  pseudocode?: string;
   metaphor_id?: number;
   word_ids?: number[];
 }) {
@@ -213,6 +215,7 @@ export function updateAnnotation(id: number, data: {
   if (data.notes !== undefined) { sets.push('notes = ?'); values.push(data.notes); }
   if (data.confidence !== undefined) { sets.push('confidence = ?'); values.push(data.confidence); }
   if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
+  if (data.pseudocode !== undefined) { sets.push('pseudocode = ?'); values.push(data.pseudocode); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   db.prepare(`UPDATE verse_metaphors SET ${sets.join(', ')} WHERE id = ?`).run(...values);
