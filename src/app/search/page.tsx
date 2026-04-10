@@ -3,7 +3,16 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash } from 'lucide-react';
+import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Check } from 'lucide-react';
+
+interface WordAnnotation {
+  id: number;
+  lemma: string;
+  strongs: string;
+  language: string;
+  gloss: string;
+  notes: string;
+}
 
 export default function SearchPage() {
   return (
@@ -24,15 +33,34 @@ function SearchContent() {
   const [lemmaVerses, setLemmaVerses] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // Word annotation state
+  const [wordAnnotations, setWordAnnotations] = useState<Map<string, WordAnnotation>>(new Map());
+  const [annotatingLemma, setAnnotatingLemma] = useState<string | null>(null);
+  const [annotForm, setAnnotForm] = useState({ gloss: '', notes: '' });
+
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
   }, [initialQ]);
+
+  // Load all existing word annotations
+  async function loadWordAnnotations() {
+    try {
+      const res = await fetch('/api/word-annotations');
+      const data: WordAnnotation[] = await res.json();
+      const map = new Map<string, WordAnnotation>();
+      for (const wa of data) map.set(wa.lemma + ':' + wa.language, wa);
+      setWordAnnotations(map);
+    } catch {}
+  }
+
+  useEffect(() => { loadWordAnnotations(); }, []);
 
   async function doSearch(q: string) {
     if (!q.trim()) return;
     setLoading(true);
     setExpandedLemma(null);
     setLemmaVerses([]);
+    setAnnotatingLemma(null);
     try {
       if (mode === 'text') {
         const res = await fetch(`/api/verses?q=${encodeURIComponent(q)}&limit=100`);
@@ -46,6 +74,43 @@ function SearchContent() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleAnnotateSave(lemma: string, language: string, strongs?: string) {
+    const key = lemma + ':' + language;
+    const existing = wordAnnotations.get(key);
+    if (existing) {
+      await fetch(`/api/word-annotations/${existing.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gloss: annotForm.gloss, notes: annotForm.notes }),
+      });
+    } else {
+      await fetch('/api/word-annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lemma, language, strongs: strongs || '', gloss: annotForm.gloss, notes: annotForm.notes }),
+      });
+    }
+    await loadWordAnnotations();
+    setAnnotatingLemma(null);
+  }
+
+  async function handleAnnotateDelete(lemma: string, language: string) {
+    const key = lemma + ':' + language;
+    const existing = wordAnnotations.get(key);
+    if (!existing) return;
+    if (!confirm('Delete this word annotation?')) return;
+    await fetch(`/api/word-annotations/${existing.id}`, { method: 'DELETE' });
+    await loadWordAnnotations();
+    setAnnotatingLemma(null);
+  }
+
+  function startAnnotating(lemma: string, language: string) {
+    const key = lemma + ':' + language;
+    const existing = wordAnnotations.get(key);
+    setAnnotatingLemma(lemma);
+    setAnnotForm({ gloss: existing?.gloss || '', notes: existing?.notes || '' });
   }
 
   async function expandLemma(lemma: string, language: string, strongs?: string) {
@@ -141,36 +206,108 @@ function SearchContent() {
           <>
             <p className="text-sm mb-4" style={{ color: 'var(--muted)' }}>{wordResults.length} unique lemmas found</p>
             <div className="space-y-2">
-              {wordResults.map((w: any, idx: number) => (
+              {wordResults.map((w: any, idx: number) => {
+                const waKey = w.lemma + ':' + w.language;
+                const existingAnnotation = wordAnnotations.get(waKey);
+                const isAnnotating = annotatingLemma === w.lemma;
+
+                return (
                 <div key={idx}>
-                  <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}
-                    className="w-full text-left p-4 rounded-lg border hover:shadow-sm transition-shadow flex items-center justify-between"
-                    style={{ backgroundColor: 'var(--verse-bg)', borderColor: expandedLemma === w.lemma ? 'var(--primary)' : 'var(--border)' }}>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xl font-semibold ${w.language === 'hebrew' ? 'hebrew-text' : 'greek-text'}`}>
-                        {w.sample_text}
-                      </span>
-                      <div className="flex flex-col gap-0.5">
-                        {w.strongs && (
-                          <span className="text-xs px-1.5 py-0.5 rounded font-mono" style={{ backgroundColor: 'color-mix(in srgb, var(--provisional) 15%, transparent)', color: 'var(--provisional)' }}>
-                            {w.strongs}
+                  {/* Word header row */}
+                  <div className="p-4 rounded-lg border hover:shadow-sm transition-shadow"
+                    style={{
+                      backgroundColor: 'var(--verse-bg)',
+                      borderColor: expandedLemma === w.lemma ? 'var(--primary)' : existingAnnotation ? 'var(--provisional)' : 'var(--border)',
+                      borderLeftWidth: existingAnnotation ? '3px' : undefined,
+                      borderLeftColor: existingAnnotation ? 'var(--provisional)' : undefined,
+                    }}>
+                    <div className="flex items-center justify-between">
+                      <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}
+                        className="flex items-center gap-3 text-left flex-1">
+                        <span className={`text-xl font-semibold ${w.language === 'hebrew' ? 'hebrew-text' : 'greek-text'}`}>
+                          {w.sample_text}
+                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          {w.strongs && (
+                            <span className="text-xs px-1.5 py-0.5 rounded font-mono" style={{ backgroundColor: 'color-mix(in srgb, var(--provisional) 15%, transparent)', color: 'var(--provisional)' }}>
+                              {w.strongs}
+                            </span>
+                          )}
+                          {w.language === 'greek' && (
+                            <span className="text-xs" style={{ color: 'var(--muted)' }}>lemma: {w.lemma}</span>
+                          )}
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        {existingAnnotation?.gloss && (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--provisional) 12%, transparent)', color: 'var(--provisional)' }}>
+                            {existingAnnotation.gloss}
                           </span>
                         )}
-                        {w.language === 'greek' && (
-                          <span className="text-xs" style={{ color: 'var(--muted)' }}>lemma: {w.lemma}</span>
-                        )}
+                        <button onClick={(e) => { e.stopPropagation(); startAnnotating(w.lemma, w.language); }}
+                          className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
+                          style={{ borderColor: existingAnnotation ? 'var(--provisional)' : 'var(--border)', color: existingAnnotation ? 'var(--provisional)' : 'var(--muted)' }}
+                          title={existingAnnotation ? 'Edit annotation' : 'Annotate this word'}>
+                          {existingAnnotation ? <Edit2 className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
+                        </button>
+                        <span className="text-sm font-medium" style={{ color: 'var(--muted)' }}>
+                          {w.occurrence_count}×
+                        </span>
+                        <span className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
+                          {w.language === 'hebrew' ? 'Heb' : 'Grk'}
+                        </span>
+                        <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}>
+                          {expandedLemma === w.lemma ? <ChevronDown className="w-4 h-4" style={{ color: 'var(--muted)' }} /> : <ChevronRight className="w-4 h-4" style={{ color: 'var(--muted)' }} />}
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium" style={{ color: 'var(--muted)' }}>
-                        {w.occurrence_count}x
-                      </span>
-                      <span className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
-                        {w.language === 'hebrew' ? 'Heb' : 'Grk'}
-                      </span>
-                      {expandedLemma === w.lemma ? <ChevronDown className="w-4 h-4" style={{ color: 'var(--muted)' }} /> : <ChevronRight className="w-4 h-4" style={{ color: 'var(--muted)' }} />}
-                    </div>
-                  </button>
+
+                    {/* Existing annotation display */}
+                    {existingAnnotation && !isAnnotating && existingAnnotation.notes && (
+                      <p className="text-xs mt-2 pl-1" style={{ color: 'var(--muted)' }}>
+                        {existingAnnotation.notes}
+                      </p>
+                    )}
+
+                    {/* Inline annotation form */}
+                    {isAnnotating && (
+                      <div className="mt-3 pt-3 space-y-2" style={{ borderTop: '1px solid var(--border)' }}>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Gloss</label>
+                            <input type="text" value={annotForm.gloss} onChange={e => setAnnotForm(f => ({ ...f, gloss: e.target.value }))}
+                              placeholder="English meaning..."
+                              className="w-full p-1.5 border rounded-lg text-sm"
+                              style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
+                            <input type="text" value={annotForm.notes} onChange={e => setAnnotForm(f => ({ ...f, notes: e.target.value }))}
+                              placeholder="Semantic range, usage notes..."
+                              className="w-full p-1.5 border rounded-lg text-sm"
+                              style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => handleAnnotateSave(w.lemma, w.language, w.strongs)}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-white"
+                            style={{ backgroundColor: 'var(--provisional)' }}>
+                            <Save className="w-3 h-3" /> {existingAnnotation ? 'Update' : 'Save'}
+                          </button>
+                          <button onClick={() => setAnnotatingLemma(null)}
+                            className="px-3 py-1.5 rounded-lg text-xs" style={{ color: 'var(--muted)' }}>
+                            Cancel
+                          </button>
+                          {existingAnnotation && (
+                            <button onClick={() => handleAnnotateDelete(w.lemma, w.language)}
+                              className="px-2 py-1.5 rounded-lg text-xs ml-auto" style={{ color: 'var(--disputed)' }}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Expanded: verses containing this lemma */}
                   {expandedLemma === w.lemma && lemmaVerses.length > 0 && (
@@ -190,7 +327,8 @@ function SearchContent() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
