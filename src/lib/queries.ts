@@ -114,6 +114,197 @@ export function getWordsForVerses(verseIds: number[]) {
   ).all(...verseIds);
 }
 
+// --- Word Search ---
+
+export function searchWordsByConsonants(consonants: string, limit = 200) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
+            COUNT(*) as occurrence_count,
+            b.language
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE w.root_consonants = ?
+     GROUP BY w.lemma
+     ORDER BY occurrence_count DESC
+     LIMIT ?`
+  ).all(consonants, limit);
+}
+
+export function searchWordsByStrongs(strongs: string, limit = 200) {
+  const db = ensureSchema();
+  const normalized = strongs.toUpperCase().startsWith('H') ? strongs.toUpperCase() : 'H' + strongs;
+  return db.prepare(
+    `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
+            COUNT(*) as occurrence_count,
+            b.language
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE w.strongs = ?
+     GROUP BY w.lemma
+     ORDER BY occurrence_count DESC
+     LIMIT ?`
+  ).all(normalized, limit);
+}
+
+export function searchWordsByGreekLemma(lemma: string, limit = 200) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT DISTINCT w.lemma, w.text as sample_text, w.morph as sample_morph,
+            COUNT(*) as occurrence_count,
+            b.language
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE b.language = 'greek' AND w.lemma = ?
+     GROUP BY w.lemma
+     ORDER BY occurrence_count DESC
+     LIMIT ?`
+  ).all(lemma, limit);
+}
+
+export function getVersesContainingLemma(lemma: string, language: string, limit = 200) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT DISTINCT v.id, v.book_id, v.chapter, v.verse, v.original_text,
+            b.language, b.abbreviation, b.name as book_name
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE w.lemma = ? AND b.language = ?
+     ORDER BY b.book_order, v.chapter, v.verse
+     LIMIT ?`
+  ).all(lemma, language, limit);
+}
+
+export function getVersesContainingStrongs(strongs: string, limit = 200) {
+  const db = ensureSchema();
+  const normalized = strongs.toUpperCase().startsWith('H') ? strongs.toUpperCase() : 'H' + strongs;
+  return db.prepare(
+    `SELECT DISTINCT v.id, v.book_id, v.chapter, v.verse, v.original_text,
+            b.language, b.abbreviation, b.name as book_name
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE w.strongs = ?
+     ORDER BY b.book_order, v.chapter, v.verse
+     LIMIT ?`
+  ).all(normalized, limit);
+}
+
+export function searchWords(query: string, limit = 50) {
+  const db = ensureSchema();
+  const trimmed = query.trim();
+
+  // Detect Strong's number pattern (H1234, G1234, or just digits)
+  const strongsMatch = trimmed.match(/^[HhGg]?(\d+[a-z]?)$/);
+  if (strongsMatch) {
+    const num = strongsMatch[1];
+    const prefix = trimmed.toUpperCase().startsWith('G') ? 'G' : 'H';
+    return db.prepare(
+      `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
+              COUNT(*) as occurrence_count, b.language
+       FROM words w
+       JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
+       WHERE w.strongs = ?
+       GROUP BY w.lemma ORDER BY occurrence_count DESC LIMIT ?`
+    ).all(prefix + num, limit);
+  }
+
+  // Detect Hebrew consonants (contains Hebrew Unicode)
+  if (/[\u0590-\u05FF]/.test(trimmed)) {
+    const consonants = trimmed.replace(/[\u0591-\u05C7]/g, '');
+    return db.prepare(
+      `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
+              COUNT(*) as occurrence_count, b.language
+       FROM words w
+       JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
+       WHERE w.root_consonants LIKE ?
+       GROUP BY w.lemma ORDER BY occurrence_count DESC LIMIT ?`
+    ).all(`%${consonants}%`, limit);
+  }
+
+  // Detect Greek (contains Greek Unicode)
+  if (/[\u0370-\u03FF\u1F00-\u1FFF]/.test(trimmed)) {
+    return db.prepare(
+      `SELECT DISTINCT w.lemma, w.text as sample_text, w.morph as sample_morph,
+              COUNT(*) as occurrence_count, b.language
+       FROM words w
+       JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
+       WHERE b.language = 'greek' AND (w.lemma LIKE ? OR w.text LIKE ?)
+       GROUP BY w.lemma ORDER BY occurrence_count DESC LIMIT ?`
+    ).all(`%${trimmed}%`, `%${trimmed}%`, limit);
+  }
+
+  // Fallback: search all lemmas
+  return db.prepare(
+    `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
+            COUNT(*) as occurrence_count, b.language
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
+     WHERE w.lemma LIKE ? OR w.text LIKE ?
+     GROUP BY w.lemma ORDER BY occurrence_count DESC LIMIT ?`
+  ).all(`%${trimmed}%`, `%${trimmed}%`, limit);
+}
+
+// --- Word Annotations ---
+
+export function getWordAnnotations() {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT wa.*,
+            (SELECT COUNT(DISTINCT w.id) FROM words w WHERE w.lemma = wa.lemma
+             AND w.verse_id IN (SELECT v.id FROM verses v JOIN books b ON v.book_id = b.id WHERE b.language = wa.language)) as occurrence_count
+     FROM word_annotations wa
+     ORDER BY wa.updated_at DESC`
+  ).all();
+}
+
+export function getWordAnnotationByLemma(lemma: string, language: string) {
+  const db = ensureSchema();
+  return db.prepare(
+    'SELECT * FROM word_annotations WHERE lemma = ? AND language = ?'
+  ).get(lemma, language);
+}
+
+export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN word_annotations wa ON w.lemma = wa.lemma
+     JOIN books b ON v.book_id = b.id
+     WHERE v.book_id = ? AND v.chapter = ? AND wa.language = b.language`
+  ).all(bookId, chapter);
+}
+
+export function createWordAnnotation(data: { lemma: string; language: string; strongs?: string; gloss?: string; notes?: string }) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT OR IGNORE INTO word_annotations (lemma, language, strongs, gloss, notes) VALUES (?, ?, ?, ?, ?)'
+  ).run(data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null);
+}
+
+export function updateWordAnnotation(id: number, data: { gloss?: string; notes?: string; strongs?: string }) {
+  const db = ensureSchema();
+  const sets: string[] = [];
+  const values: any[] = [];
+  if (data.gloss !== undefined) { sets.push('gloss = ?'); values.push(data.gloss); }
+  if (data.notes !== undefined) { sets.push('notes = ?'); values.push(data.notes); }
+  if (data.strongs !== undefined) { sets.push('strongs = ?'); values.push(data.strongs); }
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  return db.prepare(`UPDATE word_annotations SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function deleteWordAnnotation(id: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM word_annotations WHERE id = ?').run(id);
+}
+
 // --- Verse Metaphors (Annotations) ---
 
 export function getAnnotationsForVerse(verseId: number) {
@@ -280,7 +471,17 @@ export function getDashboardStats() {
      JOIN completed_verses cv ON w.verse_id = cv.verse_id`
   ).get() as any).count;
 
-  return { totalVerses, totalMetaphors, totalAnnotations, byConfidence, recentAnnotations, topMetaphors, completedVerses, totalWords, completedWords };
+  const annotatedLemmas = (db.prepare('SELECT COUNT(*) as count FROM word_annotations').get() as any).count;
+  const totalUniqueLemmas = (db.prepare('SELECT COUNT(DISTINCT lemma) as count FROM words').get() as any).count;
+  const wordsWithAnnotatedLemma = (db.prepare(
+    `SELECT COUNT(DISTINCT w.id) as count FROM words w
+     JOIN word_annotations wa ON w.lemma = wa.lemma
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE wa.language = b.language`
+  ).get() as any).count;
+
+  return { totalVerses, totalMetaphors, totalAnnotations, byConfidence, recentAnnotations, topMetaphors, completedVerses, totalWords, completedWords, annotatedLemmas, totalUniqueLemmas, wordsWithAnnotatedLemma };
 }
 
 // --- Domain Classes ---

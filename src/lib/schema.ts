@@ -151,9 +151,37 @@ export function initializeSchema(db: Database.Database) {
       completed_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_cv_verse ON completed_verses(verse_id);
+
+    -- Word-level annotations (global, by lemma)
+    CREATE TABLE IF NOT EXISTS word_annotations (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      lemma       TEXT NOT NULL,
+      strongs     TEXT,
+      language    TEXT NOT NULL CHECK(language IN ('hebrew','greek')),
+      gloss       TEXT,
+      notes       TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(lemma, language)
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);
+    CREATE INDEX IF NOT EXISTS idx_wa_strongs ON word_annotations(strongs);
+
+    -- Word search indexes (lemma is always present)
+    CREATE INDEX IF NOT EXISTS idx_words_lemma ON words(lemma);
   `);
 
   runMigrations(db);
+
+  // Create indexes on migrated columns (must run AFTER migrations add them)
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_words_strongs ON words(strongs);
+      CREATE INDEX IF NOT EXISTS idx_words_root ON words(root_consonants);
+    `);
+  } catch {
+    // Columns may not exist yet on very first run before migration
+  }
 }
 
 /**
@@ -165,6 +193,8 @@ function runMigrations(db: Database.Database) {
     { table: 'verse_metaphors', column: 'pseudocode', definition: 'TEXT' },
     { table: 'verse_metaphors', column: 'mapping', definition: 'TEXT' },
     { table: 'verses', column: 'completed', definition: 'INTEGER NOT NULL DEFAULT 0' },
+    { table: 'words', column: 'strongs', definition: 'TEXT' },
+    { table: 'words', column: 'root_consonants', definition: 'TEXT' },
   ];
 
   for (const m of migrations) {
@@ -175,6 +205,53 @@ function runMigrations(db: Database.Database) {
       console.log(`  [migration] Added ${m.table}.${m.column}`);
     }
   }
+
+  populateWordFields(db);
+}
+
+/**
+ * Populate strongs and root_consonants for existing words that lack them.
+ * Runs after column migrations so the columns exist.
+ */
+function populateWordFields(db: Database.Database) {
+  // Check if words table has the strongs column yet (it might not if schema was just created fresh)
+  const wordCols = db.pragma('table_info(words)') as { name: string }[];
+  if (!wordCols.some(c => c.name === 'strongs')) return;
+
+  // Check if we need to populate (any words with NULL strongs and numeric lemma)
+  const needsPopulate = db.prepare(
+    "SELECT COUNT(*) as c FROM words WHERE strongs IS NULL AND lemma GLOB '[0-9]*'"
+  ).get() as any;
+  if (needsPopulate.c === 0) return;
+
+  console.log('  [migration] Populating strongs and root_consonants...');
+
+  // Populate strongs for Hebrew words with numeric lemmas
+  db.exec(`
+    UPDATE words SET strongs = 'H' || REPLACE(lemma, ' ', '')
+    WHERE strongs IS NULL AND lemma GLOB '[0-9]*'
+      AND verse_id IN (SELECT v.id FROM verses v JOIN books b ON v.book_id = b.id WHERE b.language = 'hebrew')
+  `);
+
+  // For root_consonants, we need JS to strip niqqud
+  const hebrewWords = db.prepare(`
+    SELECT w.id, w.text FROM words w
+    JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
+    WHERE b.language = 'hebrew' AND w.root_consonants IS NULL
+  `).all() as { id: number; text: string }[];
+
+  if (hebrewWords.length === 0) return;
+
+  const updateRoot = db.prepare('UPDATE words SET root_consonants = ? WHERE id = ?');
+  const stripNiqqud = (text: string) => text.replace(/[\u0591-\u05C7]/g, '');
+
+  const batch = db.transaction(() => {
+    for (const w of hebrewWords) {
+      updateRoot.run(stripNiqqud(w.text), w.id);
+    }
+  });
+  batch();
+  console.log(`  [migration] Populated ${hebrewWords.length} root_consonants entries.`);
 }
 
 export function initializeFts(db: Database.Database) {

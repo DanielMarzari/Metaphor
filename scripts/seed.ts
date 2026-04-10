@@ -71,6 +71,17 @@ async function downloadSBLGNT() {
   }
 }
 
+// --- Helpers for word fields ---
+
+function stripNiqqud(text: string): string {
+  return text.replace(/[\u0591-\u05C7]/g, '');
+}
+
+function toStrongs(lemma: string): string | null {
+  if (/^\d/.test(lemma)) return 'H' + lemma.replace(/\s+/g, '');
+  return null;
+}
+
 // --- Phase B: Parse and insert Hebrew OT ---
 
 interface SegmentData {
@@ -111,7 +122,7 @@ function parseWLC(db: Database.Database) {
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
   const insertWord = db.prepare(
-    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph, strongs, root_consonants) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   const otBooks = BOOKS.filter(b => b.wlcFile);
@@ -184,7 +195,7 @@ function parseWLC(db: Database.Database) {
             for (let g = 0; g < wordSegments.length; g++) {
               const segs = wordSegments[g];
               for (const seg of segs) {
-                insertWord.run(verseId, order, g + 1, seg.text, seg.lemma, seg.morph);
+                insertWord.run(verseId, order, g + 1, seg.text, seg.lemma, seg.morph, toStrongs(seg.lemma), stripNiqqud(seg.text));
                 order++;
                 bookSegmentCount++;
               }
@@ -214,7 +225,7 @@ function parseSBLGNT(db: Database.Database) {
     'INSERT OR IGNORE INTO verses (book_id, chapter, verse, original_text) VALUES (?, ?, ?, ?)'
   );
   const insertWord = db.prepare(
-    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO words (verse_id, word_order, word_group, text, lemma, morph, strongs, root_consonants) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   const ntBooks = BOOKS.filter(b => b.sblgntBook);
@@ -263,7 +274,7 @@ function parseSBLGNT(db: Database.Database) {
             const w = words[i];
             const morph = `${w.pos}|${w.parsing}`;
             // Greek words are one segment each, word_group = word_order
-            insertWord.run(verseId, i + 1, i + 1, w.text, w.lemma, morph);
+            insertWord.run(verseId, i + 1, i + 1, w.text, w.lemma, morph, null, null);
             bookWordCount++;
           }
         }

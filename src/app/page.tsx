@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { BookOpen, Tag, FileText, TrendingUp, Clock, Search, ChevronRight, StickyNote, Pin, Plus, X, Edit3, Save } from 'lucide-react';
+import { BookOpen, Tag, FileText, TrendingUp, Clock, Search, ChevronRight, StickyNote, Pin, Plus, X, Edit3, Save, Hash } from 'lucide-react';
 import Link from 'next/link';
 
 interface ProjectNote {
@@ -103,6 +103,10 @@ export default function DashboardPage() {
     ? Math.round((stats.completedVerses / stats.totalVerses) * 10000) / 100
     : 0;
 
+  const wordAnnotationPct = stats?.totalWords
+    ? Math.round((stats.wordsWithAnnotatedLemma / stats.totalWords) * 10000) / 100
+    : 0;
+
   return (
     <div className="min-h-screen">
       {/* Header */}
@@ -159,12 +163,37 @@ export default function DashboardPage() {
               {' '}&middot;{' '}
               {(stats.completedWords || 0).toLocaleString()} of {(stats.totalWords || 0).toLocaleString()} words in completed verses
             </p>
+
+            {/* Word Annotation Progress */}
+            <h3 className="text-sm font-medium mt-4 mb-2" style={{ color: 'var(--muted)' }}>Word Annotations</h3>
+            <div className="w-full rounded-full h-5 overflow-hidden" style={{ backgroundColor: 'var(--surface-2)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2"
+                style={{
+                  width: `${Math.max(wordAnnotationPct, wordAnnotationPct > 0 ? 2 : 0)}%`,
+                  backgroundColor: 'var(--provisional)',
+                }}
+              >
+                {wordAnnotationPct >= 5 && (
+                  <span className="text-xs font-bold text-white">{wordAnnotationPct}%</span>
+                )}
+              </div>
+            </div>
+            {wordAnnotationPct > 0 && wordAnnotationPct < 5 && (
+              <span className="text-xs font-bold mt-1 inline-block" style={{ color: 'var(--provisional)' }}>{wordAnnotationPct}%</span>
+            )}
+            <p className="text-sm mt-2" style={{ color: 'var(--muted)' }}>
+              {(stats.annotatedLemmas || 0).toLocaleString()} of {(stats.totalUniqueLemmas || 0).toLocaleString()} unique lemmas annotated
+              {' '}&middot;{' '}
+              {(stats.wordsWithAnnotatedLemma || 0).toLocaleString()} of {(stats.totalWords || 0).toLocaleString()} total word occurrences covered
+            </p>
           </div>
         )}
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
           <StatCard icon={<BookOpen className="w-5 h-5" />} label="Verses" value={stats?.totalVerses?.toLocaleString() || '—'} />
+          <StatCard icon={<Hash className="w-5 h-5" />} label="Lemmas" value={stats?.annotatedLemmas?.toLocaleString() || '0'} color="var(--provisional)" />
           <StatCard icon={<Tag className="w-5 h-5" />} label="Metaphors" value={stats?.totalMetaphors || '0'} />
           <StatCard icon={<FileText className="w-5 h-5" />} label="Annotations" value={stats?.totalAnnotations || '0'} />
           <StatCard icon={<TrendingUp className="w-5 h-5" />} label="Confirmed" value={confidence.confirmed || '0'} color="var(--confirmed)" />

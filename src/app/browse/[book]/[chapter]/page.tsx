@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, use, useRef } from 'react';
+import { useState, useEffect, use, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen, CheckCircle, Circle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen, CheckCircle, Circle, Edit2 } from 'lucide-react';
 
 interface Verse {
   id: number; book_id: number; chapter: number; verse: number;
@@ -11,7 +11,7 @@ interface Verse {
 
 interface Word {
   id: number; verse_id: number; word_order: number; word_group: number;
-  text: string; lemma: string; morph: string;
+  text: string; lemma: string; morph: string; strongs: string; root_consonants: string;
 }
 
 interface Annotation {
@@ -150,6 +150,12 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   // Verse completion
   const [completedVerses, setCompletedVerses] = useState<Set<number>>(new Set());
 
+  // Word annotations (lemma-level)
+  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>>(new Map());
+  const [wordInfoWord, setWordInfoWord] = useState<{ word: Word; x: number; y: number } | null>(null);
+  const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string } | null>(null);
+  const wordInfoRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     fetch('/api/books').then(r => r.json()).then((books: any[]) => {
       const found = books.find((b: any) => b.abbreviation.toLowerCase() === bookAbbr.toLowerCase());
@@ -172,6 +178,10 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
           openAnnotatePanel(selectionVerseId);
         }
       }
+      if (e.key === 'Escape' && wordInfoWord) {
+        setWordInfoWord(null);
+        setWordAnnotationForm(null);
+      }
       if (e.key === 'Escape' && showPanel) {
         closePanel();
       }
@@ -179,6 +189,20 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
+
+  // Close word info popover on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (wordInfoRef.current && !wordInfoRef.current.contains(e.target as Node)) {
+        setWordInfoWord(null);
+        setWordAnnotationForm(null);
+      }
+    }
+    if (wordInfoWord) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [wordInfoWord]);
 
   async function loadVerses(bookId: number, ch: number) {
     const res = await fetch(`/api/verses?book_id=${bookId}&chapter=${ch}`);
@@ -211,6 +235,17 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       const cData = await cRes.json();
       setCompletedVerses(new Set(cData.map((c: any) => c.verse_id)));
     } catch { setCompletedVerses(new Set()); }
+
+    // Fetch annotated lemmas for this chapter
+    try {
+      const waRes = await fetch(`/api/word-annotations?book_id=${bookId}&chapter=${ch}`);
+      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
+      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
+      for (const al of annotatedLemmaData) {
+        annotatedLemmaMap.set(al.lemma, al);
+      }
+      setAnnotatedLemmas(annotatedLemmaMap);
+    } catch { setAnnotatedLemmas(new Map()); }
   }
 
   async function toggleVerseCompletion(verseId: number) {
@@ -239,6 +274,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
   function openAnnotatePanel(verseId: number, annotation?: Annotation) {
     setShowPanel(true);
+    setWordInfoWord(null);
+    setWordAnnotationForm(null);
     if (annotation) {
       setEditingAnnotation(annotation);
       setSelectedMetaphor(annotation.metaphor_id);
@@ -294,6 +331,11 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       if (next.size === 0) setSelectionVerseId(null);
       return next;
     });
+
+    // Show word info popover
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    setWordInfoWord({ word, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+    setWordAnnotationForm(null);
   }
 
   function handleWordHover(word: Word, e: React.MouseEvent) {
@@ -367,6 +409,56 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       else next.delete(verseId);
       return next;
     });
+  }
+
+  async function refreshAnnotatedLemmas() {
+    if (!bookInfo) return;
+    try {
+      const waRes = await fetch(`/api/word-annotations?book_id=${bookInfo.id}&chapter=${chapter}`);
+      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
+      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
+      for (const al of data) map.set(al.lemma, al);
+      setAnnotatedLemmas(map);
+    } catch {}
+  }
+
+  async function handleWordAnnotationSave(word: Word) {
+    if (!wordAnnotationForm || !word.lemma) return;
+    const existing = annotatedLemmas.get(word.lemma);
+    if (existing) {
+      // Update
+      await fetch(`/api/word-annotations/${existing.annotation_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes }),
+      });
+    } else {
+      // Create
+      await fetch('/api/word-annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lemma: word.lemma,
+          language: bookInfo.language,
+          strongs: word.strongs || '',
+          gloss: wordAnnotationForm.gloss,
+          notes: wordAnnotationForm.notes,
+        }),
+      });
+    }
+    await refreshAnnotatedLemmas();
+    setWordAnnotationForm(null);
+    setWordInfoWord(null);
+  }
+
+  async function handleWordAnnotationDelete(lemma: string) {
+    const existing = annotatedLemmas.get(lemma);
+    if (!existing) return;
+    if (!confirm('Delete this word annotation?')) return;
+    await fetch(`/api/word-annotations/${existing.annotation_id}`, { method: 'DELETE' });
+    await refreshAnnotatedLemmas();
+    setWordAnnotationForm(null);
+    setWordInfoWord(null);
   }
 
   if (!bookInfo) return <div className="min-h-screen flex items-center justify-center" style={{ color: 'var(--muted)' }}>Loading...</div>;
@@ -450,6 +542,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                       const highlightConf = highlightMap.get(word.id);
                       const prevWord = words[idx - 1];
                       const nextWord = words[idx + 1];
+                      const hasWordAnnotation = annotatedLemmas.has(word.lemma);
                       const sameGroupPrev = prevWord && prevWord.word_group === word.word_group;
                       const sameGroupNext = nextWord && nextWord.word_group === word.word_group;
                       // Space only between different word groups
@@ -482,6 +575,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                               textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
                               textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
                               textUnderlineOffset: '4px',
+                              borderBottom: hasWordAnnotation ? '2px solid var(--provisional)' : undefined,
+                              paddingBottom: hasWordAnnotation ? '1px' : undefined,
                             }}
                           >{word.text}</span>
                           {needsSpace && ' '}
@@ -559,6 +654,159 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               Lemma: {hoverWord.word.lemma}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Word Info Popover */}
+      {wordInfoWord && !showPanel && (
+        <div
+          ref={wordInfoRef}
+          className="fixed z-[55] rounded-xl shadow-2xl border p-4 w-72"
+          style={{
+            left: `${Math.min(Math.max(wordInfoWord.x - 144, 8), typeof window !== 'undefined' ? window.innerWidth - 296 : 500)}px`,
+            top: `${wordInfoWord.y}px`,
+            backgroundColor: 'var(--surface)',
+            borderColor: 'var(--border)',
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {/* Close button */}
+          <button onClick={() => { setWordInfoWord(null); setWordAnnotationForm(null); }}
+            className="absolute top-2 right-2 p-0.5 rounded hover:opacity-70"
+            style={{ color: 'var(--muted)' }}>
+            <X className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Word display */}
+          <div className={`text-xl font-semibold mb-2 ${isHebrew ? 'hebrew-text' : 'greek-text'}`}>
+            {wordInfoWord.word.text}
+          </div>
+
+          {/* Morphological parsing */}
+          <div className="text-xs px-1.5 py-0.5 rounded inline-block mb-2" style={{
+            backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
+          }}>
+            {decodeMorph(wordInfoWord.word.morph, bookInfo.language)}
+          </div>
+
+          {/* Lemma */}
+          {wordInfoWord.word.lemma && (
+            <div className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
+              <span className="font-medium">Lemma:</span>{' '}
+              <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.85rem' }}>
+                {wordInfoWord.word.lemma}
+              </span>
+            </div>
+          )}
+
+          {/* Strong's number */}
+          {wordInfoWord.word.strongs && (
+            <div className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
+              <span className="font-medium">Strong&apos;s:</span> {wordInfoWord.word.strongs}
+            </div>
+          )}
+
+          {/* Root consonants */}
+          {wordInfoWord.word.root_consonants && (
+            <div className="text-xs mb-1" style={{ color: 'var(--muted)' }}>
+              <span className="font-medium">Root:</span>{' '}
+              <span className={isHebrew ? 'hebrew-text' : 'greek-text'} style={{ fontSize: '0.85rem' }}>
+                {wordInfoWord.word.root_consonants}
+              </span>
+            </div>
+          )}
+
+          {/* Divider */}
+          <div className="border-t my-2.5" style={{ borderColor: 'var(--border)' }} />
+
+          {/* Existing annotation or annotate button */}
+          {(() => {
+            const existing = wordInfoWord.word.lemma ? annotatedLemmas.get(wordInfoWord.word.lemma) : null;
+
+            if (wordAnnotationForm) {
+              // Inline annotation form
+              return (
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Gloss</label>
+                    <input type="text" value={wordAnnotationForm.gloss}
+                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, gloss: e.target.value } : prev)}
+                      placeholder="English gloss..."
+                      className="w-full p-1.5 border rounded text-sm"
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+                      autoFocus />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Notes</label>
+                    <textarea value={wordAnnotationForm.notes}
+                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, notes: e.target.value } : prev)}
+                      placeholder="Semantic range, usage notes..."
+                      rows={3}
+                      className="w-full p-1.5 border rounded text-xs resize-y"
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleWordAnnotationSave(wordInfoWord.word)}
+                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-white"
+                      style={{ backgroundColor: 'var(--primary)' }}>
+                      <Save className="w-3 h-3" /> Save
+                    </button>
+                    <button onClick={() => setWordAnnotationForm(null)}
+                      className="px-2 py-1.5 rounded text-xs border"
+                      style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            if (existing) {
+              // Show existing annotation
+              return (
+                <div>
+                  <div className="text-xs font-medium mb-1" style={{ color: 'var(--provisional)' }}>
+                    Word Annotation
+                  </div>
+                  {existing.gloss && (
+                    <div className="text-sm font-medium mb-1">{existing.gloss}</div>
+                  )}
+                  {existing.notes && (
+                    <div className="text-xs mb-2" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
+                  )}
+                  <div className="flex gap-2">
+                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '' })}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
+                      style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}>
+                      <Edit2 className="w-3 h-3" /> Edit
+                    </button>
+                    <button onClick={() => handleWordAnnotationDelete(wordInfoWord.word.lemma)}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
+                      style={{ borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)', color: 'var(--disputed)' }}>
+                      <Trash2 className="w-3 h-3" /> Delete
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // No annotation yet — show annotate button
+            if (wordInfoWord.word.lemma) {
+              return (
+                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '' })}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center hover:opacity-80 transition-opacity"
+                  style={{
+                    backgroundColor: 'color-mix(in srgb, var(--provisional) 10%, transparent)',
+                    color: 'var(--provisional)',
+                    border: '1px solid color-mix(in srgb, var(--provisional) 30%, transparent)',
+                  }}>
+                  <Plus className="w-3 h-3" /> Annotate This Word
+                </button>
+              );
+            }
+
+            return null;
+          })()}
         </div>
       )}
 
