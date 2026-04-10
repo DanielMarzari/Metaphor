@@ -26,6 +26,13 @@ interface Metaphor {
   id: number; name: string; description: string; category: string; usage_count: number;
 }
 
+interface WordAnnotationData {
+  annotation_id: number; lemma: string; gloss: string; notes: string; strongs: string;
+  metaphor_id: number | null; metaphor_name: string | null; source_domain: string;
+  target_domain: string; mapping: string; pseudocode: string; confidence: string;
+  linguistic_evidence: string;
+}
+
 // --- Component ---
 
 export default function ChapterPage({ params }: { params: Promise<{ book: string; chapter: string }> }) {
@@ -59,11 +66,15 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [linguisticEvidence, setLinguisticEvidence] = useState('');
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
 
+  // Metaphor inline editing
+  const [editingMetaphorId, setEditingMetaphorId] = useState<number | null>(null);
+  const [editingMetaphorName, setEditingMetaphorName] = useState('');
+
   // Verse completion
   const [completedVerses, setCompletedVerses] = useState<Set<number>>(new Set());
 
-  // Word annotations (lemma-level)
-  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>>(new Map());
+  // Word annotations (lemma-level) — multiple per lemma
+  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, WordAnnotationData[]>>(new Map());
   const [wordInfoWord, setWordInfoWord] = useState<{ word: Word; x: number; y: number } | null>(null);
   const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string } | null>(null);
   const wordInfoRef = useRef<HTMLDivElement>(null);
@@ -151,10 +162,11 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     // Fetch annotated lemmas for this chapter
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookId}&chapter=${ch}`);
-      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
-      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
+      const annotatedLemmaData: WordAnnotationData[] = await waRes.json();
+      const annotatedLemmaMap = new Map<string, WordAnnotationData[]>();
       for (const al of annotatedLemmaData) {
-        annotatedLemmaMap.set(al.lemma, al);
+        if (!annotatedLemmaMap.has(al.lemma)) annotatedLemmaMap.set(al.lemma, []);
+        annotatedLemmaMap.get(al.lemma)!.push(al);
       }
       setAnnotatedLemmas(annotatedLemmaMap);
     } catch { setAnnotatedLemmas(new Map()); }
@@ -263,6 +275,30 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setHoverWord(null);
   }
 
+  async function handleMetaphorRename() {
+    if (!editingMetaphorId || !editingMetaphorName.trim()) return;
+    const res = await fetch(`/api/metaphors/${editingMetaphorId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editingMetaphorName.trim() }),
+    });
+    if (res.ok) {
+      const mRes = await fetch('/api/metaphors');
+      setMetaphors(await mRes.json());
+      // Refresh annotations to show updated name
+      if (selectionVerseId) {
+        const aRes = await fetch(`/api/verse-metaphors?verse_id=${selectionVerseId}`);
+        const aData = await aRes.json();
+        setAnnotations(prev => new Map(prev).set(selectionVerseId!, aData));
+      }
+      setEditingMetaphorId(null);
+      setEditingMetaphorName('');
+    } else {
+      const err = await res.json();
+      alert(err.error || 'Failed to rename');
+    }
+  }
+
   async function handleSave() {
     if (!selectionVerseId) return;
     let metaphorId = selectedMetaphor;
@@ -327,45 +363,38 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     if (!bookInfo) return;
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookInfo.id}&chapter=${chapter}`);
-      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
-      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
-      for (const al of data) map.set(al.lemma, al);
+      const data: WordAnnotationData[] = await waRes.json();
+      const map = new Map<string, WordAnnotationData[]>();
+      for (const al of data) {
+        if (!map.has(al.lemma)) map.set(al.lemma, []);
+        map.get(al.lemma)!.push(al);
+      }
       setAnnotatedLemmas(map);
     } catch {}
   }
 
   async function handleWordAnnotationSave(word: Word) {
     if (!wordAnnotationForm || !word.lemma) return;
-    const existing = annotatedLemmas.get(word.lemma);
-    if (existing) {
-      await fetch(`/api/word-annotations/${existing.annotation_id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes }),
-      });
-    } else {
-      await fetch('/api/word-annotations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lemma: word.lemma,
-          language: bookInfo.language,
-          strongs: word.strongs || '',
-          gloss: wordAnnotationForm.gloss,
-          notes: wordAnnotationForm.notes,
-        }),
-      });
-    }
+    // Always create new (word annotations are now multiple per lemma, managed from search page)
+    await fetch('/api/word-annotations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lemma: word.lemma,
+        language: bookInfo.language,
+        strongs: word.strongs || '',
+        gloss: wordAnnotationForm.gloss,
+        notes: wordAnnotationForm.notes,
+      }),
+    });
     await refreshAnnotatedLemmas();
     setWordAnnotationForm(null);
     setWordInfoWord(null);
   }
 
-  async function handleWordAnnotationDelete(lemma: string) {
-    const existing = annotatedLemmas.get(lemma);
-    if (!existing) return;
+  async function handleWordAnnotationDelete(annotationId: number) {
     if (!confirm('Delete this word annotation?')) return;
-    await fetch(`/api/word-annotations/${existing.annotation_id}`, { method: 'DELETE' });
+    await fetch(`/api/word-annotations/${annotationId}`, { method: 'DELETE' });
     await refreshAnnotatedLemmas();
     setWordAnnotationForm(null);
     setWordInfoWord(null);
@@ -452,7 +481,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                       const highlightConf = highlightMap.get(word.id);
                       const prevWord = words[idx - 1];
                       const nextWord = words[idx + 1];
-                      const hasWordAnnotation = annotatedLemmas.has(word.lemma);
                       const sameGroupPrev = prevWord && prevWord.word_group === word.word_group;
                       const sameGroupNext = nextWord && nextWord.word_group === word.word_group;
                       // Space only between different word groups
@@ -485,8 +513,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                               textDecoration: highlightConf && !isSelected ? 'underline' : 'none',
                               textDecorationColor: highlightConf ? `var(--${highlightConf})` : undefined,
                               textUnderlineOffset: '4px',
-                              borderBottom: hasWordAnnotation ? '2px solid var(--provisional)' : undefined,
-                              paddingBottom: hasWordAnnotation ? '1px' : undefined,
                             }}
                           >{word.text}</span>
                           {needsSpace && ' '}
@@ -526,6 +552,35 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                       )}
                     </button>
                   ))}
+                  {/* Word-level annotations as pills */}
+                  {(() => {
+                    const seen = new Set<number>();
+                    const wordAnnots: WordAnnotationData[] = [];
+                    for (const w of words) {
+                      const lemmaAnnots = annotatedLemmas.get(w.lemma);
+                      if (lemmaAnnots) {
+                        for (const wa of lemmaAnnots) {
+                          if (!seen.has(wa.annotation_id)) {
+                            seen.add(wa.annotation_id);
+                            wordAnnots.push(wa);
+                          }
+                        }
+                      }
+                    }
+                    return wordAnnots.map(wa => (
+                      <Link key={`wa-${wa.annotation_id}`}
+                        href={`/search?q=${wa.strongs || wa.lemma}&edit=${wa.annotation_id}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
+                        style={{
+                          backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 15%, transparent)`,
+                          color: `var(--${wa.confidence || 'draft'})`,
+                          border: `1px solid color-mix(in srgb, var(--${wa.confidence || 'draft'}) 30%, transparent)`,
+                        }}>
+                        <BookOpen className="w-3 h-3" />
+                        {wa.metaphor_name || wa.gloss || wa.strongs || wa.lemma}
+                      </Link>
+                    ));
+                  })()}
                   <button onClick={() => openAnnotatePanel(verse.id)}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-80"
                     style={{ color: 'var(--primary)' }}
@@ -629,93 +684,38 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
           {/* Divider */}
           <div className="border-t my-2.5" style={{ borderColor: 'var(--border)' }} />
 
-          {/* Existing annotation or annotate button */}
+          {/* Existing word annotations + annotate link */}
           {(() => {
-            const existing = wordInfoWord.word.lemma ? annotatedLemmas.get(wordInfoWord.word.lemma) : null;
-
-            if (wordAnnotationForm) {
-              // Inline annotation form
-              return (
-                <div className="space-y-2">
-                  <div>
-                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Gloss</label>
-                    <input type="text" value={wordAnnotationForm.gloss}
-                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, gloss: e.target.value } : prev)}
-                      placeholder="English gloss..."
-                      className="w-full p-1.5 border rounded text-sm"
-                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
-                      autoFocus />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Notes</label>
-                    <textarea value={wordAnnotationForm.notes}
-                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, notes: e.target.value } : prev)}
-                      placeholder="Semantic range, usage notes..."
-                      rows={3}
-                      className="w-full p-1.5 border rounded text-xs resize-y"
-                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => handleWordAnnotationSave(wordInfoWord.word)}
-                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-white"
-                      style={{ backgroundColor: 'var(--primary)' }}>
-                      <Save className="w-3 h-3" /> Save
-                    </button>
-                    <button onClick={() => setWordAnnotationForm(null)}
-                      className="px-2 py-1.5 rounded text-xs border"
-                      style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              );
-            }
-
-            if (existing) {
-              // Show existing annotation
-              return (
-                <div>
-                  <div className="text-xs font-medium mb-1" style={{ color: 'var(--provisional)' }}>
-                    Word Annotation
-                  </div>
-                  {existing.gloss && (
-                    <div className="text-sm font-medium mb-1">{existing.gloss}</div>
-                  )}
-                  {existing.notes && (
-                    <div className="text-xs mb-2" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '' })}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
-                      style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}>
-                      <Edit2 className="w-3 h-3" /> Edit
-                    </button>
-                    <button onClick={() => handleWordAnnotationDelete(wordInfoWord.word.lemma)}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
-                      style={{ borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)', color: 'var(--disputed)' }}>
-                      <Trash2 className="w-3 h-3" /> Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            }
-
-            // No annotation yet — show annotate button
-            if (wordInfoWord.word.lemma) {
-              return (
-                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '' })}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center hover:opacity-80 transition-opacity"
-                  style={{
-                    backgroundColor: 'color-mix(in srgb, var(--provisional) 10%, transparent)',
-                    color: 'var(--provisional)',
-                    border: '1px solid color-mix(in srgb, var(--provisional) 30%, transparent)',
-                  }}>
-                  <Plus className="w-3 h-3" /> Annotate This Word
-                </button>
-              );
-            }
-
-            return null;
+            const existingList = wordInfoWord.word.lemma ? (annotatedLemmas.get(wordInfoWord.word.lemma) || []) : [];
+            const searchQ = wordInfoWord.word.strongs || wordInfoWord.word.lemma;
+            return (
+              <div className="space-y-1.5">
+                {existingList.map(wa => (
+                  <Link key={wa.annotation_id}
+                    href={`/search?q=${searchQ}&edit=${wa.annotation_id}`}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs hover:opacity-80 transition-opacity border"
+                    style={{
+                      backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 8%, transparent)`,
+                      borderColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 30%, transparent)`,
+                      color: `var(--${wa.confidence || 'draft'})`,
+                    }}>
+                    <Tag className="w-3 h-3 shrink-0" />
+                    <span className="font-medium truncate">{wa.metaphor_name || wa.gloss || 'Annotation'}</span>
+                  </Link>
+                ))}
+                {wordInfoWord.word.lemma && (
+                  <Link href={`/search?q=${searchQ}`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center hover:opacity-80 transition-opacity"
+                    style={{
+                      backgroundColor: 'color-mix(in srgb, var(--primary) 10%, transparent)',
+                      color: 'var(--primary)',
+                      border: '1px solid color-mix(in srgb, var(--primary) 30%, transparent)',
+                    }}>
+                    <Plus className="w-3 h-3" /> Annotate in Lemma View
+                  </Link>
+                )}
+              </div>
+            );
           })()}
         </div>
       )}
@@ -775,12 +775,39 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Metaphor</label>
-                  <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
-                    className="w-full p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
-                    <option value="">— Select or create new —</option>
-                    {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                  {!selectedMetaphor && (
+                  <div className="flex gap-1.5">
+                    <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); setEditingMetaphorId(null); }}
+                      className="flex-1 p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                      <option value="">— Select or create new —</option>
+                      {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                    {selectedMetaphor && (
+                      <button onClick={() => {
+                        const m = metaphors.find(m => m.id === selectedMetaphor);
+                        if (m) { setEditingMetaphorId(m.id); setEditingMetaphorName(m.name); }
+                      }}
+                        className="p-1.5 rounded-lg border hover:shadow-sm shrink-0"
+                        style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}
+                        title="Edit metaphor name">
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {editingMetaphorId && (
+                    <div className="flex gap-1.5 mt-1.5">
+                      <input type="text" value={editingMetaphorName} onChange={e => setEditingMetaphorName(e.target.value)}
+                        className="flex-1 p-1.5 border rounded-lg text-sm"
+                        style={{ backgroundColor: 'var(--background)', borderColor: 'var(--primary)' }}
+                        onKeyDown={e => { if (e.key === 'Enter') handleMetaphorRename(); if (e.key === 'Escape') setEditingMetaphorId(null); }} />
+                      <button onClick={handleMetaphorRename}
+                        className="px-2.5 py-1 rounded-lg text-xs font-medium text-white"
+                        style={{ backgroundColor: 'var(--primary)' }}>Rename</button>
+                      <button onClick={() => setEditingMetaphorId(null)}
+                        className="px-2 py-1 rounded-lg text-xs border"
+                        style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Cancel</button>
+                    </div>
+                  )}
+                  {!selectedMetaphor && !editingMetaphorId && (
                     <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
                       placeholder="New metaphor name (e.g. GOD IS KING)"
                       className="w-full p-1.5 border rounded-lg text-sm mt-1.5"

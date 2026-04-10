@@ -273,16 +273,17 @@ export function getWordAnnotationByLemma(lemma: string, language: string) {
 export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
   const db = ensureSchema();
   return db.prepare(
-    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs,
+    `SELECT wa.id as annotation_id, wa.lemma, wa.gloss, wa.notes, wa.strongs,
             wa.metaphor_id, wa.source_domain, wa.target_domain, wa.mapping, wa.pseudocode,
             wa.confidence, wa.linguistic_evidence, m.name as metaphor_name
-     FROM words w
-     JOIN verses v ON w.verse_id = v.id
-     JOIN word_annotations wa ON w.lemma = wa.lemma
-     JOIN books b ON v.book_id = b.id
+     FROM word_annotations wa
+     JOIN books b ON wa.language = b.language AND b.id = ?
      LEFT JOIN metaphors m ON wa.metaphor_id = m.id
-     WHERE v.book_id = ? AND v.chapter = ? AND wa.language = b.language`
-  ).all(bookId, chapter);
+     WHERE EXISTS (
+       SELECT 1 FROM words w JOIN verses v ON w.verse_id = v.id
+       WHERE w.lemma = wa.lemma AND v.book_id = ? AND v.chapter = ?
+     )`
+  ).all(bookId, bookId, chapter);
 }
 
 export function createWordAnnotation(data: {

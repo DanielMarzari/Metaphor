@@ -43,6 +43,7 @@ export default function SearchPage() {
 function SearchContent() {
   const searchParams = useSearchParams();
   const initialQ = searchParams.get('q') || '';
+  const editAnnotationId = searchParams.get('edit') ? parseInt(searchParams.get('edit')!) : null;
   const [query, setQuery] = useState(initialQ);
   const [mode, setMode] = useState<'text' | 'word'>('word');
   const [verseResults, setVerseResults] = useState<any[]>([]);
@@ -50,10 +51,15 @@ function SearchContent() {
   const [expandedLemma, setExpandedLemma] = useState<string | null>(null);
   const [lemmaVerses, setLemmaVerses] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [editParamHandled, setEditParamHandled] = useState(false);
 
   // Word annotations (full metaphor data)
   const [wordAnnotations, setWordAnnotations] = useState<Map<string, WordAnnotation[]>>(new Map());
   const [metaphors, setMetaphors] = useState<Metaphor[]>([]);
+
+  // Metaphor inline editing
+  const [editingMetaphorId, setEditingMetaphorId] = useState<number | null>(null);
+  const [editingMetaphorName, setEditingMetaphorName] = useState('');
 
   // Annotation form state
   const [annotatingLemma, setAnnotatingLemma] = useState<string | null>(null);
@@ -71,6 +77,20 @@ function SearchContent() {
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
   }, [initialQ]);
+
+  // Handle edit= param: once annotations + word results are loaded, auto-open the edit form
+  useEffect(() => {
+    if (!editAnnotationId || editParamHandled || loading) return;
+    // Find the annotation across all loaded word annotations
+    for (const [, annots] of wordAnnotations) {
+      const found = annots.find(a => a.id === editAnnotationId);
+      if (found) {
+        startEditing(found);
+        setEditParamHandled(true);
+        return;
+      }
+    }
+  }, [editAnnotationId, wordAnnotations, loading, editParamHandled]);
 
   useEffect(() => { loadWordAnnotations(); loadMetaphors(); }, []);
 
@@ -196,6 +216,24 @@ function SearchContent() {
 
     await loadWordAnnotations();
     closeAnnotationForm();
+  }
+
+  async function handleMetaphorRename() {
+    if (!editingMetaphorId || !editingMetaphorName.trim()) return;
+    const res = await fetch(`/api/metaphors/${editingMetaphorId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editingMetaphorName.trim() }),
+    });
+    if (res.ok) {
+      await loadMetaphors();
+      await loadWordAnnotations();
+      setEditingMetaphorId(null);
+      setEditingMetaphorName('');
+    } else {
+      const err = await res.json();
+      alert(err.error || 'Failed to rename');
+    }
   }
 
   async function handleDelete(annotationId: number) {
@@ -427,12 +465,39 @@ function SearchContent() {
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                             <div className="sm:col-span-2">
                               <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Metaphor</label>
-                              <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
-                                className="w-full p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
-                                <option value="">— Select or create new —</option>
-                                {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                              </select>
-                              {!selectedMetaphor && (
+                              <div className="flex gap-1.5">
+                                <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); setEditingMetaphorId(null); }}
+                                  className="flex-1 p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                                  <option value="">— Select or create new —</option>
+                                  {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                </select>
+                                {selectedMetaphor && (
+                                  <button onClick={() => {
+                                    const m = metaphors.find(m => m.id === selectedMetaphor);
+                                    if (m) { setEditingMetaphorId(m.id); setEditingMetaphorName(m.name); }
+                                  }}
+                                    className="p-1.5 rounded-lg border hover:shadow-sm shrink-0"
+                                    style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}
+                                    title="Edit metaphor name">
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                              {editingMetaphorId && (
+                                <div className="flex gap-1.5 mt-1.5">
+                                  <input type="text" value={editingMetaphorName} onChange={e => setEditingMetaphorName(e.target.value)}
+                                    className="flex-1 p-1.5 border rounded-lg text-sm"
+                                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--primary)' }}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleMetaphorRename(); if (e.key === 'Escape') setEditingMetaphorId(null); }} />
+                                  <button onClick={handleMetaphorRename}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-medium text-white"
+                                    style={{ backgroundColor: 'var(--primary)' }}>Rename</button>
+                                  <button onClick={() => setEditingMetaphorId(null)}
+                                    className="px-2 py-1 rounded-lg text-xs border"
+                                    style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Cancel</button>
+                                </div>
+                              )}
+                              {!selectedMetaphor && !editingMetaphorId && (
                                 <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
                                   placeholder="New metaphor name (e.g. GOD IS KING)"
                                   className="w-full p-1.5 border rounded-lg text-sm mt-1.5"
