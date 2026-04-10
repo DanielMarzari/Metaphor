@@ -273,7 +273,14 @@ export function getDashboardStats() {
      LIMIT 10`
   ).all();
 
-  return { totalVerses, totalMetaphors, totalAnnotations, byConfidence, recentAnnotations, topMetaphors };
+  const completedVerses = (db.prepare('SELECT COUNT(*) as count FROM completed_verses').get() as any).count;
+  const totalWords = (db.prepare('SELECT COUNT(*) as count FROM words').get() as any).count;
+  const completedWords = (db.prepare(
+    `SELECT COUNT(*) as count FROM words w
+     JOIN completed_verses cv ON w.verse_id = cv.verse_id`
+  ).get() as any).count;
+
+  return { totalVerses, totalMetaphors, totalAnnotations, byConfidence, recentAnnotations, topMetaphors, completedVerses, totalWords, completedWords };
 }
 
 // --- Domain Classes ---
@@ -485,6 +492,71 @@ export function createPropertyMapping(metaphorId: number, sourcePropId: number, 
 export function deletePropertyMapping(id: number) {
   const db = ensureSchema();
   return db.prepare('DELETE FROM property_mappings WHERE id = ?').run(id);
+}
+
+// --- Project Notes ---
+
+export function getProjectNotes() {
+  const db = ensureSchema();
+  return db.prepare(
+    'SELECT * FROM project_notes ORDER BY pinned DESC, updated_at DESC'
+  ).all();
+}
+
+export function getProjectNoteById(id: number) {
+  const db = ensureSchema();
+  return db.prepare('SELECT * FROM project_notes WHERE id = ?').get(id);
+}
+
+export function createProjectNote(data: { title: string; content: string; note_type?: string; pinned?: boolean }) {
+  const db = ensureSchema();
+  return db.prepare(
+    'INSERT INTO project_notes (title, content, note_type, pinned) VALUES (?, ?, ?, ?)'
+  ).run(data.title, data.content, data.note_type || 'general', data.pinned ? 1 : 0);
+}
+
+export function updateProjectNote(id: number, data: { title?: string; content?: string; note_type?: string; pinned?: boolean }) {
+  const db = ensureSchema();
+  const sets: string[] = [];
+  const values: any[] = [];
+  if (data.title !== undefined) { sets.push('title = ?'); values.push(data.title); }
+  if (data.content !== undefined) { sets.push('content = ?'); values.push(data.content); }
+  if (data.note_type !== undefined) { sets.push('note_type = ?'); values.push(data.note_type); }
+  if (data.pinned !== undefined) { sets.push('pinned = ?'); values.push(data.pinned ? 1 : 0); }
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  return db.prepare(`UPDATE project_notes SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function deleteProjectNote(id: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM project_notes WHERE id = ?').run(id);
+}
+
+// --- Completed Verses ---
+
+export function markVerseComplete(verseId: number) {
+  const db = ensureSchema();
+  return db.prepare('INSERT OR IGNORE INTO completed_verses (verse_id) VALUES (?)').run(verseId);
+}
+
+export function unmarkVerseComplete(verseId: number) {
+  const db = ensureSchema();
+  return db.prepare('DELETE FROM completed_verses WHERE verse_id = ?').run(verseId);
+}
+
+export function getCompletedVersesForChapter(bookId: number, chapter: number) {
+  const db = ensureSchema();
+  return db.prepare(
+    `SELECT cv.verse_id FROM completed_verses cv
+     JOIN verses v ON cv.verse_id = v.id
+     WHERE v.book_id = ? AND v.chapter = ?`
+  ).all(bookId, chapter);
+}
+
+export function isVerseComplete(verseId: number) {
+  const db = ensureSchema();
+  return db.prepare('SELECT 1 FROM completed_verses WHERE verse_id = ?').get(verseId) != null;
 }
 
 // --- Export ---

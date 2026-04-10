@@ -132,7 +132,49 @@ export function initializeSchema(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_pm_metaphor ON property_mappings(metaphor_id);
+
+    -- Project notes (general research notes, methodology, philosophy, todos)
+    CREATE TABLE IF NOT EXISTS project_notes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      title      TEXT NOT NULL DEFAULT '',
+      content    TEXT NOT NULL DEFAULT '',
+      note_type  TEXT NOT NULL DEFAULT 'general' CHECK(note_type IN ('general','methodology','philosophy','todo')),
+      pinned     INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Verse completion tracking
+    CREATE TABLE IF NOT EXISTS completed_verses (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      verse_id  INTEGER NOT NULL UNIQUE REFERENCES verses(id),
+      completed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cv_verse ON completed_verses(verse_id);
   `);
+
+  runMigrations(db);
+}
+
+/**
+ * Run schema migrations: add columns that may not exist in older databases.
+ * Uses PRAGMA table_info to check before ALTER TABLE ADD COLUMN.
+ */
+function runMigrations(db: Database.Database) {
+  const migrations: { table: string; column: string; definition: string }[] = [
+    { table: 'verse_metaphors', column: 'pseudocode', definition: 'TEXT' },
+    { table: 'verse_metaphors', column: 'mapping', definition: 'TEXT' },
+    { table: 'verses', column: 'completed', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  ];
+
+  for (const m of migrations) {
+    const columns = db.pragma(`table_info(${m.table})`) as { name: string }[];
+    const exists = columns.some(c => c.name === m.column);
+    if (!exists) {
+      db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
+      console.log(`  [migration] Added ${m.table}.${m.column}`);
+    }
+  }
 }
 
 export function initializeFts(db: Database.Database) {

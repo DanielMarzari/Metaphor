@@ -287,10 +287,11 @@ async function main() {
   console.log('=== Metaphor Bible Seed Script ===');
   console.log(`Database: ${DB_PATH}`);
 
-  // Delete existing DB for clean seed
-  if (fs.existsSync(DB_PATH)) {
-    fs.unlinkSync(DB_PATH);
-    console.log('Deleted existing database.');
+  const isExisting = fs.existsSync(DB_PATH);
+  if (isExisting) {
+    console.log('Existing database found — will preserve user data.');
+  } else {
+    console.log('No existing database — creating fresh.');
   }
 
   const db = new Database(DB_PATH);
@@ -299,6 +300,71 @@ async function main() {
 
   console.log('\n=== Initializing schema ===');
   initializeSchema(db);
+
+  // --- Save old verse ID mapping for annotation re-linking ---
+  interface OldVerseRef { book_id: number; chapter: number; verse: number; old_id: number }
+  let oldVerseMap: OldVerseRef[] = [];
+
+  if (isExisting) {
+    console.log('\n=== Saving annotation verse references ===');
+    // Find all verses that have annotations (verse_metaphors or annotation_words)
+    const annotatedVerses = db.prepare(`
+      SELECT DISTINCT v.id as old_id, v.book_id, v.chapter, v.verse
+      FROM verses v
+      WHERE v.id IN (SELECT verse_id FROM verse_metaphors)
+         OR v.id IN (
+           SELECT w.verse_id FROM words w
+           JOIN annotation_words aw ON aw.word_id = w.id
+         )
+    `).all() as OldVerseRef[];
+    oldVerseMap = annotatedVerses;
+    console.log(`  Found ${oldVerseMap.length} verses with annotations to re-link.`);
+
+    // Also check completed_verses
+    const hasCompletedVersesTable = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='completed_verses'"
+    ).get();
+    let completedVerseRefs: OldVerseRef[] = [];
+    if (hasCompletedVersesTable) {
+      completedVerseRefs = db.prepare(`
+        SELECT DISTINCT v.id as old_id, v.book_id, v.chapter, v.verse
+        FROM verses v
+        JOIN completed_verses cv ON cv.verse_id = v.id
+      `).all() as OldVerseRef[];
+      if (completedVerseRefs.length > 0) {
+        // Merge into oldVerseMap (dedup)
+        const existingIds = new Set(oldVerseMap.map(r => r.old_id));
+        for (const ref of completedVerseRefs) {
+          if (!existingIds.has(ref.old_id)) {
+            oldVerseMap.push(ref);
+          }
+        }
+        console.log(`  Found ${completedVerseRefs.length} completed verses to re-link.`);
+      }
+    }
+  }
+
+  // --- Disable FK checks during base data refresh ---
+  db.pragma('foreign_keys = OFF');
+
+  console.log('\n=== Clearing base data tables (preserving user data) ===');
+  // Delete in correct order for FK constraints: words → verses → books
+  // Also drop FTS table so it can be rebuilt
+  const ftsExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='verses_fts'"
+  ).get();
+  if (ftsExists) {
+    db.exec('DROP TABLE verses_fts');
+    console.log('  Dropped verses_fts for rebuild.');
+  }
+  db.exec('DELETE FROM words');
+  console.log('  Cleared words.');
+  db.exec('DELETE FROM verses');
+  console.log('  Cleared verses.');
+  db.exec('DELETE FROM books');
+  console.log('  Cleared books.');
+
+  db.pragma('foreign_keys = ON');
 
   console.log('\n=== Inserting books ===');
   const insertBook = db.prepare(
@@ -318,6 +384,47 @@ async function main() {
   parseWLC(db);
   parseSBLGNT(db);
 
+  // --- Re-link annotations to new verse IDs ---
+  if (oldVerseMap.length > 0) {
+    console.log('\n=== Re-linking annotations to new verse IDs ===');
+    const findNewVerse = db.prepare(
+      'SELECT id FROM verses WHERE book_id = ? AND chapter = ? AND verse = ?'
+    );
+
+    let relinked = 0;
+    let orphaned = 0;
+
+    const relinkTransaction = db.transaction(() => {
+      const updateVM = db.prepare('UPDATE verse_metaphors SET verse_id = ? WHERE verse_id = ?');
+      const updateCompletedVerses = db.prepare('UPDATE completed_verses SET verse_id = ? WHERE verse_id = ?');
+      // Note: annotation_words reference word IDs which are regenerated on seed,
+      // so old word_ids become orphaned. We clean those up after this transaction.
+
+      for (const ref of oldVerseMap) {
+        const newRow = findNewVerse.get(ref.book_id, ref.chapter, ref.verse) as { id: number } | undefined;
+        if (newRow && newRow.id !== ref.old_id) {
+          updateVM.run(newRow.id, ref.old_id);
+          updateCompletedVerses.run(newRow.id, ref.old_id);
+          relinked++;
+        } else if (!newRow) {
+          orphaned++;
+        }
+        // If newRow.id === ref.old_id, no update needed
+      }
+    });
+
+    relinkTransaction();
+    console.log(`  Re-linked ${relinked} verse references, ${orphaned} orphaned (verse no longer exists).`);
+
+    // Clean up orphaned annotation_words (word_ids that no longer exist)
+    const orphanedAW = db.prepare(`
+      DELETE FROM annotation_words WHERE word_id NOT IN (SELECT id FROM words)
+    `).run();
+    if (orphanedAW.changes > 0) {
+      console.log(`  Cleaned up ${orphanedAW.changes} orphaned annotation_words (word IDs changed).`);
+    }
+  }
+
   console.log('\n=== Building FTS5 index ===');
   initializeFts(db);
 
@@ -326,12 +433,16 @@ async function main() {
   const segmentCount = db.prepare('SELECT COUNT(*) as count FROM words').get() as any;
   const otCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('OT') as any;
   const ntCount = db.prepare('SELECT COUNT(*) as count FROM verses v JOIN books b ON v.book_id = b.id WHERE b.testament = ?').get('NT') as any;
+  const vmCount = db.prepare('SELECT COUNT(*) as count FROM verse_metaphors').get() as any;
+  const metCount = db.prepare('SELECT COUNT(*) as count FROM metaphors').get() as any;
 
   console.log('\n=== Seed Complete ===');
   console.log(`  Total verses: ${verseCount.count}`);
   console.log(`  Total word segments: ${segmentCount.count}`);
   console.log(`  OT (Hebrew): ${otCount.count}`);
   console.log(`  NT (Greek): ${ntCount.count}`);
+  console.log(`  Preserved metaphors: ${metCount.count}`);
+  console.log(`  Preserved annotations: ${vmCount.count}`);
   console.log(`  Database size: ${(fs.statSync(DB_PATH).size / 1024 / 1024).toFixed(1)} MB`);
 
   db.close();

@@ -1,21 +1,49 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { BookOpen, Tag, FileText, TrendingUp, Clock, Search, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { BookOpen, Tag, FileText, TrendingUp, Clock, Search, ChevronRight, StickyNote, Pin, Plus, X, Edit3, Save } from 'lucide-react';
 import Link from 'next/link';
+
+interface ProjectNote {
+  id: number;
+  title: string;
+  content: string;
+  note_type: string;
+  pinned: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const NOTE_TYPES = ['general', 'methodology', 'philosophy', 'todo'] as const;
+
+const NOTE_TYPE_COLORS: Record<string, string> = {
+  general: 'var(--muted)',
+  methodology: 'var(--provisional)',
+  philosophy: 'var(--accent)',
+  todo: 'var(--draft)',
+};
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [notes, setNotes] = useState<ProjectNote[]>([]);
+  const [showAddNote, setShowAddNote] = useState(false);
+  const [newNote, setNewNote] = useState({ title: '', content: '', note_type: 'general' as string });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editData, setEditData] = useState({ title: '', content: '', note_type: 'general' as string });
+
+  const fetchNotes = useCallback(() => {
+    fetch('/api/project-notes').then(r => r.json()).then(setNotes);
+  }, []);
 
   useEffect(() => {
     fetch('/api/stats').then(r => r.json()).then(setStats);
-  }, []);
+    fetchNotes();
+  }, [fetchNotes]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      // Check if it's a reference pattern like "Gen 1:1" or "Matt 5"
       const refMatch = searchQuery.match(/^(\d?\s?[A-Za-z]+)\s+(\d+)(?::(\d+))?$/);
       if (refMatch) {
         const book = refMatch[1].trim().toLowerCase().replace(/\s+/g, '');
@@ -27,7 +55,53 @@ export default function DashboardPage() {
     }
   };
 
+  const handleAddNote = async () => {
+    if (!newNote.title.trim() && !newNote.content.trim()) return;
+    await fetch('/api/project-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newNote),
+    });
+    setNewNote({ title: '', content: '', note_type: 'general' });
+    setShowAddNote(false);
+    fetchNotes();
+  };
+
+  const handleDeleteNote = async (id: number) => {
+    await fetch(`/api/project-notes/${id}`, { method: 'DELETE' });
+    fetchNotes();
+  };
+
+  const handleTogglePin = async (note: ProjectNote) => {
+    await fetch(`/api/project-notes/${note.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: !note.pinned }),
+    });
+    fetchNotes();
+  };
+
+  const startEditing = (note: ProjectNote) => {
+    setEditingId(note.id);
+    setEditData({ title: note.title, content: note.content, note_type: note.note_type });
+  };
+
+  const handleSaveEdit = async () => {
+    if (editingId === null) return;
+    await fetch(`/api/project-notes/${editingId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editData),
+    });
+    setEditingId(null);
+    fetchNotes();
+  };
+
   const confidence = stats?.byConfidence?.reduce((acc: any, c: any) => ({ ...acc, [c.confidence]: c.count }), {}) || {};
+
+  const completionPct = stats?.totalVerses
+    ? Math.round((stats.completedVerses / stats.totalVerses) * 10000) / 100
+    : 0;
 
   return (
     <div className="min-h-screen">
@@ -60,6 +134,34 @@ export default function DashboardPage() {
           </div>
         </form>
 
+        {/* Bible Completion Progress */}
+        {stats && (
+          <div className="mb-8 p-5 rounded-xl border" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+            <h2 className="text-lg font-semibold mb-3">Bible Completion</h2>
+            <div className="w-full rounded-full h-5 overflow-hidden" style={{ backgroundColor: 'var(--surface-2)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2"
+                style={{
+                  width: `${Math.max(completionPct, completionPct > 0 ? 2 : 0)}%`,
+                  backgroundColor: 'var(--confirmed)',
+                }}
+              >
+                {completionPct >= 5 && (
+                  <span className="text-xs font-bold text-white">{completionPct}%</span>
+                )}
+              </div>
+            </div>
+            {completionPct > 0 && completionPct < 5 && (
+              <span className="text-xs font-bold mt-1 inline-block" style={{ color: 'var(--confirmed)' }}>{completionPct}%</span>
+            )}
+            <p className="text-sm mt-2" style={{ color: 'var(--muted)' }}>
+              {(stats.completedVerses || 0).toLocaleString()} of {stats.totalVerses?.toLocaleString()} verses completed ({completionPct}%)
+              {' '}&middot;{' '}
+              {(stats.completedWords || 0).toLocaleString()} of {(stats.totalWords || 0).toLocaleString()} words in completed verses
+            </p>
+          </div>
+        )}
+
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <StatCard icon={<BookOpen className="w-5 h-5" />} label="Verses" value={stats?.totalVerses?.toLocaleString() || '—'} />
@@ -82,6 +184,170 @@ export default function DashboardPage() {
             </span>
           </div>
         )}
+
+        {/* Process Notes & Philosophy */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <StickyNote className="w-5 h-5" style={{ color: 'var(--accent)' }} /> Process Notes &amp; Philosophy
+            </h2>
+            <button
+              onClick={() => setShowAddNote(!showAddNote)}
+              className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border hover:shadow-sm transition-shadow"
+              style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--primary)' }}
+            >
+              {showAddNote ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              {showAddNote ? 'Cancel' : 'Add Note'}
+            </button>
+          </div>
+
+          {/* Add Note Form */}
+          {showAddNote && (
+            <div className="p-4 rounded-xl border mb-4" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <input
+                type="text"
+                placeholder="Title"
+                value={newNote.title}
+                onChange={e => setNewNote(n => ({ ...n, title: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg border mb-3 text-sm"
+                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+              />
+              <textarea
+                placeholder="Write your note..."
+                value={newNote.content}
+                onChange={e => setNewNote(n => ({ ...n, content: e.target.value }))}
+                rows={5}
+                className="w-full px-3 py-2 rounded-lg border mb-3 text-sm resize-y"
+                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+              />
+              <div className="flex items-center gap-3">
+                <select
+                  value={newNote.note_type}
+                  onChange={e => setNewNote(n => ({ ...n, note_type: e.target.value }))}
+                  className="px-3 py-1.5 rounded-lg border text-sm"
+                  style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+                >
+                  {NOTE_TYPES.map(t => (
+                    <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleAddNote}
+                  className="flex items-center gap-1.5 text-sm px-4 py-1.5 rounded-lg font-medium text-white"
+                  style={{ backgroundColor: 'var(--confirmed)' }}
+                >
+                  <Save className="w-4 h-4" /> Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Notes List */}
+          {notes.length > 0 ? (
+            <div className="space-y-2">
+              {notes.map(note => (
+                <div key={note.id} className="p-3 rounded-lg border hover:shadow-sm transition-shadow" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  {editingId === note.id ? (
+                    /* Editing Mode */
+                    <div>
+                      <input
+                        type="text"
+                        value={editData.title}
+                        onChange={e => setEditData(d => ({ ...d, title: e.target.value }))}
+                        className="w-full px-2 py-1 rounded border mb-2 text-sm font-medium"
+                        style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+                      />
+                      <textarea
+                        value={editData.content}
+                        onChange={e => setEditData(d => ({ ...d, content: e.target.value }))}
+                        rows={4}
+                        className="w-full px-2 py-1 rounded border mb-2 text-sm resize-y"
+                        style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+                      />
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={editData.note_type}
+                          onChange={e => setEditData(d => ({ ...d, note_type: e.target.value }))}
+                          className="px-2 py-1 rounded border text-xs"
+                          style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
+                        >
+                          {NOTE_TYPES.map(t => (
+                            <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={handleSaveEdit}
+                          className="flex items-center gap-1 text-xs px-3 py-1 rounded font-medium text-white"
+                          style={{ backgroundColor: 'var(--confirmed)' }}
+                        >
+                          <Save className="w-3 h-3" /> Save
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="text-xs px-2 py-1 rounded"
+                          style={{ color: 'var(--muted)' }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Display Mode */
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          {note.pinned ? <Pin className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--accent)' }} /> : null}
+                          <span className="font-medium text-sm truncate">{note.title || 'Untitled'}</span>
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0"
+                            style={{
+                              backgroundColor: `color-mix(in srgb, ${NOTE_TYPE_COLORS[note.note_type] || NOTE_TYPE_COLORS.general} 15%, transparent)`,
+                              color: NOTE_TYPE_COLORS[note.note_type] || NOTE_TYPE_COLORS.general,
+                            }}
+                          >
+                            {note.note_type}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={() => handleTogglePin(note)}
+                            className="p-1 rounded hover:bg-black/5 transition-colors"
+                            title={note.pinned ? 'Unpin' : 'Pin'}
+                          >
+                            <Pin className="w-3.5 h-3.5" style={{ color: note.pinned ? 'var(--accent)' : 'var(--muted)' }} />
+                          </button>
+                          <button
+                            onClick={() => startEditing(note)}
+                            className="p-1 rounded hover:bg-black/5 transition-colors"
+                            title="Edit"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteNote(note.id)}
+                            className="p-1 rounded hover:bg-black/5 transition-colors"
+                            title="Delete"
+                          >
+                            <X className="w-3.5 h-3.5" style={{ color: 'var(--disputed)' }} />
+                          </button>
+                        </div>
+                      </div>
+                      {note.content && (
+                        <p className="text-sm mt-1 line-clamp-2" style={{ color: 'var(--muted)' }}>
+                          {note.content}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm p-4 rounded-lg" style={{ color: 'var(--muted)', backgroundColor: 'var(--surface)' }}>
+              No notes yet. Add process notes, methodology decisions, or philosophical frameworks.
+            </p>
+          )}
+        </div>
 
         <div className="grid md:grid-cols-2 gap-8">
           {/* Quick Navigation */}

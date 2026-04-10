@@ -2,7 +2,7 @@
 
 import { useState, useEffect, use, useRef } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Tag, Save, Trash2, BookOpen, CheckCircle, Circle } from 'lucide-react';
 
 interface Verse {
   id: number; book_id: number; chapter: number; verse: number;
@@ -147,6 +147,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [linguisticEvidence, setLinguisticEvidence] = useState('');
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
 
+  // Verse completion
+  const [completedVerses, setCompletedVerses] = useState<Set<number>>(new Set());
+
   useEffect(() => {
     fetch('/api/books').then(r => r.json()).then((books: any[]) => {
       const found = books.find((b: any) => b.abbreviation.toLowerCase() === bookAbbr.toLowerCase());
@@ -201,6 +204,32 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       if (aData.length > 0) annotMap.set(v.id, aData);
     }
     setAnnotations(annotMap);
+
+    // Fetch completed verses
+    try {
+      const cRes = await fetch(`/api/completed-verses?book_id=${bookId}&chapter=${ch}`);
+      const cData = await cRes.json();
+      setCompletedVerses(new Set(cData.map((c: any) => c.verse_id)));
+    } catch { setCompletedVerses(new Set()); }
+  }
+
+  async function toggleVerseCompletion(verseId: number) {
+    const isComplete = completedVerses.has(verseId);
+    if (isComplete) {
+      await fetch('/api/completed-verses', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verse_id: verseId }),
+      });
+      setCompletedVerses(prev => { const next = new Set(prev); next.delete(verseId); return next; });
+    } else {
+      await fetch('/api/completed-verses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verse_id: verseId }),
+      });
+      setCompletedVerses(prev => new Set(prev).add(verseId));
+    }
   }
 
   function clearSelection() {
@@ -401,6 +430,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
             const words = wordsByVerse.get(verse.id) || [];
             const highlightMap = getHighlightedWordIds(verse.id);
             const hasSelection = selectionVerseId === verse.id && selectedWordIds.size > 0;
+            const isVerseComplete = completedVerses.has(verse.id);
 
             return (
               <div key={verse.id}
@@ -409,6 +439,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                   backgroundColor: 'var(--verse-bg)',
                   borderColor: hasSelection ? 'var(--primary)' : 'var(--border)',
                   boxShadow: hasSelection ? '0 0 0 1px var(--primary)' : undefined,
+                  borderLeft: isVerseComplete ? '3px solid var(--confirmed)' : undefined,
                 }}>
                 {/* Verse text — segments rendered individually, spaces between word groups */}
                 <div className={isHebrew ? 'hebrew-text' : 'greek-text'}>
@@ -464,6 +495,17 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
 
                 {/* Annotations + Annotate button */}
                 <div className="flex flex-wrap items-center gap-2 mt-3" style={{ direction: 'ltr' }}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleVerseCompletion(verse.id); }}
+                    className="p-0.5 rounded hover:opacity-70 transition-opacity"
+                    title={isVerseComplete ? 'Mark incomplete' : 'Mark complete'}
+                  >
+                    {isVerseComplete ? (
+                      <CheckCircle className="w-4 h-4" style={{ color: 'var(--confirmed)' }} />
+                    ) : (
+                      <Circle className="w-4 h-4 opacity-40" style={{ color: 'var(--muted)' }} />
+                    )}
+                  </button>
                   {verseAnnotations.map(a => (
                     <button key={a.id} onClick={() => openAnnotatePanel(verse.id, a)}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
@@ -524,7 +566,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       {showPanel && selectionVerseId && selectionVerse && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/30" onClick={closePanel} />
-          <div className="relative w-full max-h-[75vh] overflow-y-auto shadow-2xl rounded-t-2xl"
+          <div className="relative w-full max-h-[90vh] overflow-y-auto shadow-2xl rounded-t-2xl"
             style={{ backgroundColor: 'var(--surface)' }}>
             {/* Drag handle + header */}
             <div className="sticky top-0 rounded-t-2xl border-b px-5 pt-3 pb-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
@@ -638,17 +680,17 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={8}
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={14}
                     placeholder="Analysis, observations, cross-references..."
                     className="w-full p-2 border rounded-lg text-sm resize-y"
-                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '160px' }} />
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '300px' }} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Pseudocode</label>
-                  <textarea value={pseudocode} onChange={e => setPseudocode(e.target.value)} rows={8}
+                  <textarea value={pseudocode} onChange={e => setPseudocode(e.target.value)} rows={14}
                     placeholder={"class TEMPORAL_CONTAINER extends CONTAINER\n  .originRegion = HEAD\n  בְּרֵאשִׁית instanceof TEMPORAL_CONTAINER\n  HEAD_IS_ORIGIN → .originRegion"}
                     className="w-full p-2 border rounded-lg text-xs resize-y font-mono"
-                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '160px', lineHeight: '1.6' }} />
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '300px', lineHeight: '1.6' }} />
                 </div>
               </div>
 
