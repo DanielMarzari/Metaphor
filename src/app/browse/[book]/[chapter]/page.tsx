@@ -63,9 +63,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [completedVerses, setCompletedVerses] = useState<Set<number>>(new Set());
 
   // Word annotations (lemma-level)
-  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>>(new Map());
+  const [annotatedLemmas, setAnnotatedLemmas] = useState<Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>>(new Map());
   const [wordInfoWord, setWordInfoWord] = useState<{ word: Word; x: number; y: number } | null>(null);
-  const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string; semantic_domain: string } | null>(null);
+  const [wordAnnotationForm, setWordAnnotationForm] = useState<{ gloss: string; notes: string } | null>(null);
   const wordInfoRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -151,8 +151,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     // Fetch annotated lemmas for this chapter
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookId}&chapter=${ch}`);
-      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }[] = await waRes.json();
-      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>();
+      const annotatedLemmaData: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
+      const annotatedLemmaMap = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
       for (const al of annotatedLemmaData) {
         annotatedLemmaMap.set(al.lemma, al);
       }
@@ -327,8 +327,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     if (!bookInfo) return;
     try {
       const waRes = await fetch(`/api/word-annotations?book_id=${bookInfo.id}&chapter=${chapter}`);
-      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }[] = await waRes.json();
-      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string; semantic_domain: string }>();
+      const data: { lemma: string; annotation_id: number; gloss: string; notes: string; strongs: string }[] = await waRes.json();
+      const map = new Map<string, { annotation_id: number; gloss: string; notes: string; strongs: string }>();
       for (const al of data) map.set(al.lemma, al);
       setAnnotatedLemmas(map);
     } catch {}
@@ -337,12 +337,11 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   async function handleWordAnnotationSave(word: Word) {
     if (!wordAnnotationForm || !word.lemma) return;
     const existing = annotatedLemmas.get(word.lemma);
-    const payload = { gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes, semantic_domain: wordAnnotationForm.semantic_domain };
     if (existing) {
       await fetch(`/api/word-annotations/${existing.annotation_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ gloss: wordAnnotationForm.gloss, notes: wordAnnotationForm.notes }),
       });
     } else {
       await fetch('/api/word-annotations', {
@@ -352,7 +351,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
           lemma: word.lemma,
           language: bookInfo.language,
           strongs: word.strongs || '',
-          ...payload,
+          gloss: wordAnnotationForm.gloss,
+          notes: wordAnnotationForm.notes,
         }),
       });
     }
@@ -637,9 +637,6 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               // Inline annotation form
               return (
                 <div className="space-y-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--provisional)' }}>
-                    Word Annotation
-                  </div>
                   <div>
                     <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Gloss</label>
                     <input type="text" value={wordAnnotationForm.gloss}
@@ -650,21 +647,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                       autoFocus />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Semantic Domain</label>
-                    <input type="text" value={wordAnnotationForm.semantic_domain}
-                      onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, semantic_domain: e.target.value } : prev)}
-                      placeholder="e.g. Creation, Kingship, Body..."
-                      className="w-full p-1.5 border rounded text-sm"
-                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-                  </div>
-                  <div>
                     <label className="block text-[10px] font-medium mb-0.5" style={{ color: 'var(--muted)' }}>Notes</label>
                     <textarea value={wordAnnotationForm.notes}
                       onChange={e => setWordAnnotationForm(prev => prev ? { ...prev, notes: e.target.value } : prev)}
-                      placeholder="Semantic range, usage patterns, etymological notes, metaphor relevance..."
-                      rows={4}
+                      placeholder="Semantic range, usage notes..."
+                      rows={3}
                       className="w-full p-1.5 border rounded text-xs resize-y"
-                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '80px' }} />
+                      style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => handleWordAnnotationSave(wordInfoWord.word)}
@@ -690,18 +679,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     Word Annotation
                   </div>
                   {existing.gloss && (
-                    <div className="text-sm font-medium mb-0.5">{existing.gloss}</div>
-                  )}
-                  {existing.semantic_domain && (
-                    <div className="text-xs mb-0.5" style={{ color: 'var(--accent)' }}>
-                      <span className="font-medium">Domain:</span> {existing.semantic_domain}
-                    </div>
+                    <div className="text-sm font-medium mb-1">{existing.gloss}</div>
                   )}
                   {existing.notes && (
-                    <div className="text-xs mb-2 whitespace-pre-wrap" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
+                    <div className="text-xs mb-2" style={{ color: 'var(--muted)' }}>{existing.notes}</div>
                   )}
                   <div className="flex gap-2">
-                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '', semantic_domain: existing.semantic_domain || '' })}
+                    <button onClick={() => setWordAnnotationForm({ gloss: existing.gloss || '', notes: existing.notes || '' })}
                       className="flex items-center gap-1 px-2 py-1 rounded text-xs border hover:opacity-80"
                       style={{ borderColor: 'var(--border)', color: 'var(--primary)' }}>
                       <Edit2 className="w-3 h-3" /> Edit
@@ -719,7 +703,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
             // No annotation yet — show annotate button
             if (wordInfoWord.word.lemma) {
               return (
-                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '', semantic_domain: '' })}
+                <button onClick={() => setWordAnnotationForm({ gloss: '', notes: '' })}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center hover:opacity-80 transition-opacity"
                   style={{
                     backgroundColor: 'color-mix(in srgb, var(--provisional) 10%, transparent)',

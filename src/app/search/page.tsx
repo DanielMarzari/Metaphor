@@ -13,7 +13,23 @@ interface WordAnnotation {
   language: string;
   gloss: string;
   notes: string;
-  semantic_domain: string;
+  metaphor_id: number | null;
+  metaphor_name: string | null;
+  metaphor_category: string | null;
+  source_domain: string;
+  target_domain: string;
+  mapping: string;
+  pseudocode: string;
+  confidence: string;
+  linguistic_evidence: string;
+}
+
+interface Metaphor {
+  id: number;
+  name: string;
+  description: string;
+  category: string;
+  usage_count: number;
 }
 
 export default function SearchPage() {
@@ -35,34 +51,56 @@ function SearchContent() {
   const [lemmaVerses, setLemmaVerses] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Word annotation state
-  const [wordAnnotations, setWordAnnotations] = useState<Map<string, WordAnnotation>>(new Map());
+  // Word annotations (full metaphor data)
+  const [wordAnnotations, setWordAnnotations] = useState<Map<string, WordAnnotation[]>>(new Map());
+  const [metaphors, setMetaphors] = useState<Metaphor[]>([]);
+
+  // Annotation form state
   const [annotatingLemma, setAnnotatingLemma] = useState<string | null>(null);
-  const [annotForm, setAnnotForm] = useState({ gloss: '', notes: '', semantic_domain: '' });
+  const [editingAnnotation, setEditingAnnotation] = useState<WordAnnotation | null>(null);
+  const [selectedMetaphor, setSelectedMetaphor] = useState<number | null>(null);
+  const [newMetaphorName, setNewMetaphorName] = useState('');
+  const [sourceDomain, setSourceDomain] = useState('');
+  const [targetDomain, setTargetDomain] = useState('');
+  const [mapping, setMapping] = useState('');
+  const [notes, setNotes] = useState('');
+  const [pseudocode, setPseudocode] = useState('');
+  const [confidence, setConfidence] = useState('draft');
+  const [linguisticEvidence, setLinguisticEvidence] = useState('');
 
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
   }, [initialQ]);
 
-  // Load all existing word annotations
+  useEffect(() => { loadWordAnnotations(); loadMetaphors(); }, []);
+
   async function loadWordAnnotations() {
     try {
       const res = await fetch('/api/word-annotations');
       const data: WordAnnotation[] = await res.json();
-      const map = new Map<string, WordAnnotation>();
-      for (const wa of data) map.set(wa.lemma + ':' + wa.language, wa);
+      const map = new Map<string, WordAnnotation[]>();
+      for (const wa of data) {
+        const key = wa.lemma + ':' + wa.language;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(wa);
+      }
       setWordAnnotations(map);
     } catch {}
   }
 
-  useEffect(() => { loadWordAnnotations(); }, []);
+  async function loadMetaphors() {
+    try {
+      const res = await fetch('/api/metaphors');
+      setMetaphors(await res.json());
+    } catch {}
+  }
 
   async function doSearch(q: string) {
     if (!q.trim()) return;
     setLoading(true);
     setExpandedLemma(null);
     setLemmaVerses([]);
-    setAnnotatingLemma(null);
+    closeAnnotationForm();
     try {
       if (mode === 'text') {
         const res = await fetch(`/api/verses?q=${encodeURIComponent(q)}&limit=100`);
@@ -78,12 +116,72 @@ function SearchContent() {
     }
   }
 
-  async function handleAnnotateSave(lemma: string, language: string, strongs?: string) {
-    const key = lemma + ':' + language;
-    const existing = wordAnnotations.get(key);
-    const payload = { gloss: annotForm.gloss, notes: annotForm.notes, semantic_domain: annotForm.semantic_domain };
-    if (existing) {
-      await fetch(`/api/word-annotations/${existing.id}`, {
+  function closeAnnotationForm() {
+    setAnnotatingLemma(null);
+    setEditingAnnotation(null);
+    resetForm();
+  }
+
+  function resetForm() {
+    setSelectedMetaphor(null);
+    setNewMetaphorName('');
+    setSourceDomain('');
+    setTargetDomain('');
+    setMapping('');
+    setNotes('');
+    setPseudocode('');
+    setConfidence('draft');
+    setLinguisticEvidence('');
+  }
+
+  function startAnnotating(lemma: string) {
+    setAnnotatingLemma(lemma);
+    setEditingAnnotation(null);
+    resetForm();
+  }
+
+  function startEditing(annotation: WordAnnotation) {
+    setAnnotatingLemma(annotation.lemma);
+    setEditingAnnotation(annotation);
+    setSelectedMetaphor(annotation.metaphor_id);
+    setNewMetaphorName('');
+    setSourceDomain(annotation.source_domain || '');
+    setTargetDomain(annotation.target_domain || '');
+    setMapping(annotation.mapping || '');
+    setNotes(annotation.notes || '');
+    setPseudocode(annotation.pseudocode || '');
+    setConfidence(annotation.confidence || 'draft');
+    setLinguisticEvidence(annotation.linguistic_evidence || '');
+  }
+
+  async function handleSave(lemma: string, language: string, strongs?: string) {
+    let metaphorId = selectedMetaphor;
+
+    // Create new metaphor if needed
+    if (!metaphorId && newMetaphorName.trim()) {
+      const res = await fetch('/api/metaphors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newMetaphorName.trim() }),
+      });
+      const data = await res.json();
+      metaphorId = data.id;
+      await loadMetaphors();
+    }
+
+    const payload = {
+      metaphor_id: metaphorId,
+      source_domain: sourceDomain,
+      target_domain: targetDomain,
+      mapping,
+      notes,
+      pseudocode,
+      confidence,
+      linguistic_evidence: linguisticEvidence,
+    };
+
+    if (editingAnnotation) {
+      await fetch(`/api/word-annotations/${editingAnnotation.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -95,29 +193,16 @@ function SearchContent() {
         body: JSON.stringify({ lemma, language, strongs: strongs || '', ...payload }),
       });
     }
+
     await loadWordAnnotations();
-    setAnnotatingLemma(null);
+    closeAnnotationForm();
   }
 
-  async function handleAnnotateDelete(lemma: string, language: string) {
-    const key = lemma + ':' + language;
-    const existing = wordAnnotations.get(key);
-    if (!existing) return;
-    if (!confirm('Delete this word annotation?')) return;
-    await fetch(`/api/word-annotations/${existing.id}`, { method: 'DELETE' });
+  async function handleDelete(annotationId: number) {
+    if (!confirm('Delete this annotation?')) return;
+    await fetch(`/api/word-annotations/${annotationId}`, { method: 'DELETE' });
     await loadWordAnnotations();
-    setAnnotatingLemma(null);
-  }
-
-  function startAnnotating(lemma: string, language: string) {
-    const key = lemma + ':' + language;
-    const existing = wordAnnotations.get(key);
-    setAnnotatingLemma(lemma);
-    setAnnotForm({
-      gloss: existing?.gloss || '',
-      notes: existing?.notes || '',
-      semantic_domain: existing?.semantic_domain || '',
-    });
+    closeAnnotationForm();
   }
 
   async function expandLemma(lemma: string, language: string, strongs?: string) {
@@ -214,7 +299,7 @@ function SearchContent() {
             <div className="space-y-3">
               {wordResults.map((w: any, idx: number) => {
                 const waKey = w.lemma + ':' + w.language;
-                const existingAnnotation = wordAnnotations.get(waKey);
+                const annotations = wordAnnotations.get(waKey) || [];
                 const isAnnotating = annotatingLemma === w.lemma;
                 const isHebrew = w.language === 'hebrew';
                 const morphDecoded = w.sample_morph ? decodeMorph(w.sample_morph, w.language) : '';
@@ -224,15 +309,14 @@ function SearchContent() {
                   <div className="rounded-xl border overflow-hidden transition-shadow hover:shadow-sm"
                     style={{
                       backgroundColor: 'var(--verse-bg)',
-                      borderColor: isAnnotating ? 'var(--primary)' : existingAnnotation ? 'var(--provisional)' : 'var(--border)',
-                      borderLeftWidth: existingAnnotation ? '4px' : undefined,
-                      borderLeftColor: existingAnnotation ? 'var(--provisional)' : undefined,
+                      borderColor: isAnnotating ? 'var(--primary)' : annotations.length > 0 ? 'var(--provisional)' : 'var(--border)',
+                      borderLeftWidth: annotations.length > 0 ? '4px' : undefined,
+                      borderLeftColor: annotations.length > 0 ? 'var(--provisional)' : undefined,
                     }}>
 
                     {/* Word header: big text + metadata */}
                     <div className="p-4 pb-3">
                       <div className="flex items-start justify-between gap-4">
-                        {/* Left: word + linguistic info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-2">
                             <span className={`text-2xl font-semibold ${isHebrew ? 'hebrew-text' : 'greek-text'}`}>
@@ -242,13 +326,9 @@ function SearchContent() {
                               {w.occurrence_count}×
                             </span>
                           </div>
-
-                          {/* Metadata row */}
                           <div className="flex flex-wrap items-center gap-1.5">
                             {morphDecoded && (
-                              <span className="text-[11px] px-1.5 py-0.5 rounded" style={{
-                                backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
-                              }}>
+                              <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
                                 {morphDecoded}
                               </span>
                             )}
@@ -260,20 +340,14 @@ function SearchContent() {
                                 {w.strongs}
                               </span>
                             )}
-                            <span className="text-[11px] px-1.5 py-0.5 rounded" style={{
-                              backgroundColor: 'var(--surface-2)', color: 'var(--muted)',
-                            }}>
+                            <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
                               {isHebrew ? 'Hebrew' : 'Greek'}
                             </span>
                             {isHebrew && w.lemma && (
-                              <span className="text-[11px]" style={{ color: 'var(--muted)' }}>
-                                Lemma: {w.lemma}
-                              </span>
+                              <span className="text-[11px]" style={{ color: 'var(--muted)' }}>Lemma: {w.lemma}</span>
                             )}
                             {!isHebrew && w.lemma && (
-                              <span className="text-[11px]" style={{ color: 'var(--muted)' }}>
-                                Lemma: <span className="greek-text">{w.lemma}</span>
-                              </span>
+                              <span className="text-[11px]" style={{ color: 'var(--muted)' }}>Lemma: <span className="greek-text">{w.lemma}</span></span>
                             )}
                             {w.root_consonants && (
                               <span className="text-[11px]" style={{ color: 'var(--muted)' }}>
@@ -282,27 +356,7 @@ function SearchContent() {
                             )}
                           </div>
                         </div>
-
-                        {/* Right: action buttons */}
                         <div className="flex items-center gap-1.5 shrink-0 pt-1">
-                          {existingAnnotation?.gloss && !isAnnotating && (
-                            <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{
-                              backgroundColor: 'color-mix(in srgb, var(--provisional) 12%, transparent)',
-                              color: 'var(--provisional)',
-                            }}>
-                              {existingAnnotation.gloss}
-                            </span>
-                          )}
-                          <button onClick={(e) => { e.stopPropagation(); isAnnotating ? setAnnotatingLemma(null) : startAnnotating(w.lemma, w.language); }}
-                            className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
-                            style={{
-                              borderColor: isAnnotating ? 'var(--primary)' : existingAnnotation ? 'var(--provisional)' : 'var(--border)',
-                              color: isAnnotating ? 'var(--primary)' : existingAnnotation ? 'var(--provisional)' : 'var(--muted)',
-                              backgroundColor: isAnnotating ? 'color-mix(in srgb, var(--primary) 8%, transparent)' : undefined,
-                            }}
-                            title={isAnnotating ? 'Close form' : existingAnnotation ? 'Edit annotation' : 'Annotate this word'}>
-                            {isAnnotating ? <X className="w-3.5 h-3.5" /> : existingAnnotation ? <Edit2 className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
-                          </button>
                           <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}
                             className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
                             style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
@@ -313,80 +367,159 @@ function SearchContent() {
                       </div>
                     </div>
 
-                    {/* Existing annotation display (when not editing) */}
-                    {existingAnnotation && !isAnnotating && (existingAnnotation.gloss || existingAnnotation.notes || existingAnnotation.semantic_domain) && (
-                      <div className="px-4 pb-3 -mt-1">
-                        <div className="flex flex-wrap gap-x-4 gap-y-1">
-                          {existingAnnotation.semantic_domain && (
-                            <span className="text-xs" style={{ color: 'var(--accent)' }}>
-                              <span className="font-medium">Domain:</span> {existingAnnotation.semantic_domain}
-                            </span>
-                          )}
-                          {existingAnnotation.notes && (
-                            <p className="text-xs" style={{ color: 'var(--muted)' }}>
-                              {existingAnnotation.notes}
-                            </p>
-                          )}
-                        </div>
+                    {/* Existing annotations list */}
+                    {annotations.length > 0 && !isAnnotating && (
+                      <div className="px-4 pb-2 space-y-2">
+                        {annotations.map(a => (
+                          <div key={a.id} className="flex items-start gap-2 p-2.5 rounded-lg border"
+                            style={{ borderColor: 'color-mix(in srgb, var(--' + (a.confidence || 'draft') + ') 30%, transparent)', backgroundColor: 'color-mix(in srgb, var(--' + (a.confidence || 'draft') + ') 5%, transparent)' }}>
+                            <div className="flex-1 min-w-0">
+                              {a.metaphor_name && (
+                                <div className="text-sm font-semibold" style={{ color: 'var(--primary)' }}>{a.metaphor_name}</div>
+                              )}
+                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs" style={{ color: 'var(--muted)' }}>
+                                {a.source_domain && <span><b>Source:</b> {a.source_domain}</span>}
+                                {a.target_domain && <span><b>Target:</b> {a.target_domain}</span>}
+                                {a.mapping && <span><b>Mapping:</b> {a.mapping}</span>}
+                              </div>
+                              {a.notes && <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{a.notes.substring(0, 120)}{a.notes.length > 120 ? '...' : ''}</p>}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                                style={{ backgroundColor: `var(--${a.confidence || 'draft'})`, color: '#fff' }}>
+                                {(a.confidence || 'draft').slice(0, 4)}
+                              </span>
+                              <button onClick={() => startEditing(a)}
+                                className="p-1 rounded hover:opacity-70" style={{ color: 'var(--primary)' }}>
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
 
-                    {/* Full annotation form */}
+                    {/* + Annotate button */}
+                    {!isAnnotating && (
+                      <div className="px-4 pb-3">
+                        <button onClick={() => startAnnotating(w.lemma)}
+                          className="flex items-center gap-1.5 text-xs font-medium hover:opacity-80 transition-opacity"
+                          style={{ color: 'var(--accent)' }}>
+                          <Plus className="w-3 h-3" /> Annotate
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Full annotation form (bottom drawer style, inline) */}
                     {isAnnotating && (
-                      <div className="px-4 pb-4 pt-1">
-                        <div className="border-t pt-3 space-y-3" style={{ borderColor: 'var(--border)' }}>
-                          <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--provisional)' }}>
-                            Word Annotation
+                      <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+                        <div className="p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--primary)' }}>
+                              {editingAnnotation ? 'Edit Annotation' : 'New Annotation'}
+                            </span>
+                            <button onClick={closeAnnotationForm} className="p-1 rounded hover:opacity-70" style={{ color: 'var(--muted)' }}>
+                              <X className="w-4 h-4" />
+                            </button>
                           </div>
 
-                          {/* Row 1: Gloss + Semantic Domain */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-[11px] font-medium mb-1" style={{ color: 'var(--muted)' }}>Gloss</label>
-                              <input type="text" value={annotForm.gloss}
-                                onChange={e => setAnnotForm(f => ({ ...f, gloss: e.target.value }))}
-                                placeholder="English meaning..."
-                                className="w-full p-2 border rounded-lg text-sm"
-                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
-                                autoFocus />
+                          {/* Row 1: Metaphor + Source + Target */}
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                            <div className="sm:col-span-2">
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Metaphor</label>
+                              <select value={selectedMetaphor || ''} onChange={e => { setSelectedMetaphor(e.target.value ? parseInt(e.target.value) : null); setNewMetaphorName(''); }}
+                                className="w-full p-1.5 border rounded-lg text-sm" style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                                <option value="">— Select or create new —</option>
+                                {metaphors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                              </select>
+                              {!selectedMetaphor && (
+                                <input type="text" value={newMetaphorName} onChange={e => setNewMetaphorName(e.target.value)}
+                                  placeholder="New metaphor name (e.g. GOD IS KING)"
+                                  className="w-full p-1.5 border rounded-lg text-sm mt-1.5"
+                                  style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                              )}
                             </div>
                             <div>
-                              <label className="block text-[11px] font-medium mb-1" style={{ color: 'var(--muted)' }}>Semantic Domain</label>
-                              <input type="text" value={annotForm.semantic_domain}
-                                onChange={e => setAnnotForm(f => ({ ...f, semantic_domain: e.target.value }))}
-                                placeholder="e.g. Creation, Kingship, Body, Motion..."
-                                className="w-full p-2 border rounded-lg text-sm"
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Source</label>
+                              <input type="text" value={sourceDomain} onChange={e => setSourceDomain(e.target.value)}
+                                placeholder="KING" className="w-full p-1.5 border rounded-lg text-sm"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Target</label>
+                              <input type="text" value={targetDomain} onChange={e => setTargetDomain(e.target.value)}
+                                placeholder="GOD" className="w-full p-1.5 border rounded-lg text-sm"
                                 style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                             </div>
                           </div>
 
-                          {/* Row 2: Notes (full-width textarea) */}
-                          <div>
-                            <label className="block text-[11px] font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
-                            <textarea value={annotForm.notes}
-                              onChange={e => setAnnotForm(f => ({ ...f, notes: e.target.value }))}
-                              placeholder="Semantic range, usage patterns, etymological notes, cognitive metaphor relevance..."
-                              rows={5}
-                              className="w-full p-2 border rounded-lg text-sm resize-y"
-                              style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '100px' }} />
+                          {/* Row 2: Mapping + Evidence + Confidence */}
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                            <div className="sm:col-span-2">
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Mapping</label>
+                              <input type="text" value={mapping} onChange={e => setMapping(e.target.value)}
+                                placeholder="throne → authority, crown → sovereignty"
+                                className="w-full p-1.5 border rounded-lg text-sm"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Evidence</label>
+                              <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
+                                placeholder="Specific words..." className="w-full p-1.5 border rounded-lg text-sm"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
+                              <div className="flex flex-wrap gap-1">
+                                {['draft', 'provisional', 'confirmed', 'disputed'].map(c => (
+                                  <button key={c} onClick={() => setConfidence(c)}
+                                    className="px-2 py-1 rounded-full text-[10px] font-medium transition-all"
+                                    style={{
+                                      backgroundColor: confidence === c ? `var(--${c})` : `color-mix(in srgb, var(--${c}) 10%, transparent)`,
+                                      color: confidence === c ? '#fff' : `var(--${c})`,
+                                      border: `1px solid color-mix(in srgb, var(--${c}) 40%, transparent)`,
+                                    }}>
+                                    {c.slice(0, 4)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           </div>
 
-                          {/* Action buttons */}
-                          <div className="flex items-center gap-2 pt-1">
-                            <button onClick={() => handleAnnotateSave(w.lemma, w.language, w.strongs)}
-                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white"
+                          {/* Notes + Pseudocode side by side */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
+                              <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={10}
+                                placeholder="Analysis, observations, cross-references..."
+                                className="w-full p-2 border rounded-lg text-sm resize-y"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '200px' }} />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Pseudocode</label>
+                              <textarea value={pseudocode} onChange={e => setPseudocode(e.target.value)} rows={10}
+                                placeholder={"class TEMPORAL_CONTAINER extends CONTAINER\n  .originRegion = HEAD\n  בְּרֵאשִׁית instanceof TEMPORAL_CONTAINER"}
+                                className="w-full p-2 border rounded-lg text-xs resize-y font-mono"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '200px', lineHeight: '1.6' }} />
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex gap-3 pt-1">
+                            <button onClick={() => handleSave(w.lemma, w.language, w.strongs)}
+                              className="flex items-center gap-2 px-5 py-2 rounded-lg font-medium text-white text-sm"
                               style={{ backgroundColor: 'var(--primary)' }}>
-                              <Save className="w-3.5 h-3.5" /> {existingAnnotation ? 'Update' : 'Save'}
+                              <Save className="w-4 h-4" /> {editingAnnotation ? 'Update' : 'Save'}
                             </button>
-                            <button onClick={() => setAnnotatingLemma(null)}
+                            <button onClick={closeAnnotationForm}
                               className="px-4 py-2 rounded-lg text-sm border"
                               style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
                               Cancel
                             </button>
-                            {existingAnnotation && (
-                              <button onClick={() => handleAnnotateDelete(w.lemma, w.language)}
+                            {editingAnnotation && (
+                              <button onClick={() => handleDelete(editingAnnotation.id)}
                                 className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm ml-auto"
-                                style={{ color: 'var(--disputed)' }}>
+                                style={{ color: 'var(--disputed)', borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)', border: '1px solid' }}>
                                 <Trash2 className="w-3.5 h-3.5" /> Delete
                               </button>
                             )}

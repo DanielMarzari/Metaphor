@@ -254,10 +254,11 @@ export function searchWords(query: string, limit = 50) {
 export function getWordAnnotations() {
   const db = ensureSchema();
   return db.prepare(
-    `SELECT wa.*,
+    `SELECT wa.*, m.name as metaphor_name, m.category as metaphor_category,
             (SELECT COUNT(DISTINCT w.id) FROM words w WHERE w.lemma = wa.lemma
              AND w.verse_id IN (SELECT v.id FROM verses v JOIN books b ON v.book_id = b.id WHERE b.language = wa.language)) as occurrence_count
      FROM word_annotations wa
+     LEFT JOIN metaphors m ON wa.metaphor_id = m.id
      ORDER BY wa.updated_at DESC`
   ).all();
 }
@@ -272,30 +273,52 @@ export function getWordAnnotationByLemma(lemma: string, language: string) {
 export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
   const db = ensureSchema();
   return db.prepare(
-    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs, wa.semantic_domain
+    `SELECT DISTINCT w.lemma, wa.id as annotation_id, wa.gloss, wa.notes, wa.strongs,
+            wa.metaphor_id, wa.source_domain, wa.target_domain, wa.mapping, wa.pseudocode,
+            wa.confidence, wa.linguistic_evidence, m.name as metaphor_name
      FROM words w
      JOIN verses v ON w.verse_id = v.id
      JOIN word_annotations wa ON w.lemma = wa.lemma
      JOIN books b ON v.book_id = b.id
+     LEFT JOIN metaphors m ON wa.metaphor_id = m.id
      WHERE v.book_id = ? AND v.chapter = ? AND wa.language = b.language`
   ).all(bookId, chapter);
 }
 
-export function createWordAnnotation(data: { lemma: string; language: string; strongs?: string; gloss?: string; notes?: string; semantic_domain?: string }) {
+export function createWordAnnotation(data: {
+  lemma: string; language: string; strongs?: string; gloss?: string; notes?: string;
+  metaphor_id?: number; source_domain?: string; target_domain?: string; mapping?: string;
+  pseudocode?: string; confidence?: string; linguistic_evidence?: string;
+}) {
   const db = ensureSchema();
   return db.prepare(
-    'INSERT OR IGNORE INTO word_annotations (lemma, language, strongs, gloss, notes, semantic_domain) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null, data.semantic_domain || null);
+    `INSERT INTO word_annotations (lemma, language, strongs, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null,
+    data.metaphor_id || null, data.source_domain || null, data.target_domain || null,
+    data.mapping || null, data.pseudocode || null, data.confidence || 'draft', data.linguistic_evidence || null
+  );
 }
 
-export function updateWordAnnotation(id: number, data: { gloss?: string; notes?: string; strongs?: string; semantic_domain?: string }) {
+export function updateWordAnnotation(id: number, data: {
+  gloss?: string; notes?: string; strongs?: string;
+  metaphor_id?: number; source_domain?: string; target_domain?: string; mapping?: string;
+  pseudocode?: string; confidence?: string; linguistic_evidence?: string;
+}) {
   const db = ensureSchema();
   const sets: string[] = [];
   const values: any[] = [];
   if (data.gloss !== undefined) { sets.push('gloss = ?'); values.push(data.gloss); }
   if (data.notes !== undefined) { sets.push('notes = ?'); values.push(data.notes); }
   if (data.strongs !== undefined) { sets.push('strongs = ?'); values.push(data.strongs); }
-  if (data.semantic_domain !== undefined) { sets.push('semantic_domain = ?'); values.push(data.semantic_domain); }
+  if (data.metaphor_id !== undefined) { sets.push('metaphor_id = ?'); values.push(data.metaphor_id); }
+  if (data.source_domain !== undefined) { sets.push('source_domain = ?'); values.push(data.source_domain); }
+  if (data.target_domain !== undefined) { sets.push('target_domain = ?'); values.push(data.target_domain); }
+  if (data.mapping !== undefined) { sets.push('mapping = ?'); values.push(data.mapping); }
+  if (data.pseudocode !== undefined) { sets.push('pseudocode = ?'); values.push(data.pseudocode); }
+  if (data.confidence !== undefined) { sets.push('confidence = ?'); values.push(data.confidence); }
+  if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   return db.prepare(`UPDATE word_annotations SET ${sets.join(', ')} WHERE id = ?`).run(...values);

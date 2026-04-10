@@ -152,7 +152,7 @@ export function initializeSchema(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_cv_verse ON completed_verses(verse_id);
 
-    -- Word-level annotations (global, by lemma)
+    -- Word-level annotations (global, by lemma — multiple per lemma allowed)
     CREATE TABLE IF NOT EXISTS word_annotations (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       lemma       TEXT NOT NULL,
@@ -161,8 +161,7 @@ export function initializeSchema(db: Database.Database) {
       gloss       TEXT,
       notes       TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(lemma, language)
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);
     CREATE INDEX IF NOT EXISTS idx_wa_strongs ON word_annotations(strongs);
@@ -195,7 +194,13 @@ function runMigrations(db: Database.Database) {
     { table: 'verses', column: 'completed', definition: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'words', column: 'strongs', definition: 'TEXT' },
     { table: 'words', column: 'root_consonants', definition: 'TEXT' },
-    { table: 'word_annotations', column: 'semantic_domain', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'metaphor_id', definition: 'INTEGER REFERENCES metaphors(id)' },
+    { table: 'word_annotations', column: 'source_domain', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'target_domain', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'mapping', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'pseudocode', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'confidence', definition: "TEXT NOT NULL DEFAULT 'draft'" },
+    { table: 'word_annotations', column: 'linguistic_evidence', definition: 'TEXT' },
   ];
 
   for (const m of migrations) {
@@ -205,6 +210,44 @@ function runMigrations(db: Database.Database) {
       db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
       console.log(`  [migration] Added ${m.table}.${m.column}`);
     }
+  }
+
+  // Remove UNIQUE(lemma, language) from word_annotations (allow multiple annotations per lemma)
+  try {
+    const indexInfo = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='word_annotations'"
+    ).get() as { sql: string } | undefined;
+    if (indexInfo?.sql?.includes('UNIQUE(lemma, language)') || indexInfo?.sql?.includes('UNIQUE(lemma,language)')) {
+      console.log('  [migration] Removing UNIQUE constraint from word_annotations...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS word_annotations_new (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          lemma       TEXT NOT NULL,
+          strongs     TEXT,
+          language    TEXT NOT NULL CHECK(language IN ('hebrew','greek')),
+          gloss       TEXT,
+          notes       TEXT,
+          metaphor_id INTEGER REFERENCES metaphors(id),
+          source_domain TEXT,
+          target_domain TEXT,
+          mapping     TEXT,
+          pseudocode  TEXT,
+          confidence  TEXT NOT NULL DEFAULT 'draft',
+          linguistic_evidence TEXT,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO word_annotations_new (id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence, created_at, updated_at)
+          SELECT id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, COALESCE(confidence, 'draft'), linguistic_evidence, created_at, updated_at FROM word_annotations;
+        DROP TABLE word_annotations;
+        ALTER TABLE word_annotations_new RENAME TO word_annotations;
+        CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);
+        CREATE INDEX IF NOT EXISTS idx_wa_strongs ON word_annotations(strongs);
+      `);
+      console.log('  [migration] word_annotations UNIQUE constraint removed.');
+    }
+  } catch (e) {
+    console.log('  [migration] word_annotations UNIQUE migration skipped:', e);
   }
 
   populateWordFields(db);
