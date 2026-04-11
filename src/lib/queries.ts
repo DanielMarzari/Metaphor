@@ -134,8 +134,10 @@ export function searchWordsByConsonants(consonants: string, limit = 200) {
 
 export function searchWordsByStrongs(strongs: string, limit = 200) {
   const db = ensureSchema();
-  const upper = strongs.toUpperCase();
-  const normalized = upper.startsWith('H') || upper.startsWith('G') ? upper : 'H' + upper;
+  // Only uppercase the H/G prefix, preserve lowercase suffix (DB stores H1254a not H1254A)
+  const prefix = strongs.match(/^[HhGg]/)?.[0]?.toUpperCase() || 'H';
+  const rest = strongs.replace(/^[HhGg]/, '') || strongs;
+  const normalized = (strongs.match(/^[HhGg]/) ? prefix : 'H') + rest;
   // Use LIKE prefix match to handle suffixed Strong's (e.g. H7218a, H7218b)
   // If query already has a letter suffix, use exact match
   const hasLetterSuffix = /[a-zA-Z]$/.test(normalized.slice(1));
@@ -185,8 +187,10 @@ export function getVersesContainingLemma(lemma: string, language: string, limit 
 
 export function getVersesContainingStrongs(strongs: string, limit = 200) {
   const db = ensureSchema();
-  const upper = strongs.toUpperCase();
-  const normalized = upper.startsWith('H') || upper.startsWith('G') ? upper : 'H' + upper;
+  // Only uppercase the H/G prefix, preserve lowercase suffix (DB stores H1254a not H1254A)
+  const prefix = strongs.match(/^[HhGg]/)?.[0]?.toUpperCase() || 'H';
+  const rest = strongs.replace(/^[HhGg]/, '') || strongs;
+  const normalized = (strongs.match(/^[HhGg]/) ? prefix : 'H') + rest;
   const hasLetterSuffix = /[a-zA-Z]$/.test(normalized.slice(1));
   return db.prepare(
     `SELECT DISTINCT v.id, v.book_id, v.chapter, v.verse, v.original_text,
