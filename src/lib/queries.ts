@@ -134,7 +134,11 @@ export function searchWordsByConsonants(consonants: string, limit = 200) {
 
 export function searchWordsByStrongs(strongs: string, limit = 200) {
   const db = ensureSchema();
-  const normalized = strongs.toUpperCase().startsWith('H') ? strongs.toUpperCase() : 'H' + strongs;
+  const upper = strongs.toUpperCase();
+  const normalized = upper.startsWith('H') || upper.startsWith('G') ? upper : 'H' + upper;
+  // Use LIKE prefix match to handle suffixed Strong's (e.g. H7218a, H7218b)
+  // If query already has a letter suffix, use exact match
+  const hasLetterSuffix = /[a-zA-Z]$/.test(normalized.slice(1));
   return db.prepare(
     `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
             COUNT(*) as occurrence_count,
@@ -142,7 +146,7 @@ export function searchWordsByStrongs(strongs: string, limit = 200) {
      FROM words w
      JOIN verses v ON w.verse_id = v.id
      JOIN books b ON v.book_id = b.id
-     WHERE w.strongs = ?
+     WHERE ${hasLetterSuffix ? 'w.strongs = ?' : "w.strongs LIKE ? || '%'"}
      GROUP BY w.lemma
      ORDER BY occurrence_count DESC
      LIMIT ?`
@@ -181,14 +185,16 @@ export function getVersesContainingLemma(lemma: string, language: string, limit 
 
 export function getVersesContainingStrongs(strongs: string, limit = 200) {
   const db = ensureSchema();
-  const normalized = strongs.toUpperCase().startsWith('H') ? strongs.toUpperCase() : 'H' + strongs;
+  const upper = strongs.toUpperCase();
+  const normalized = upper.startsWith('H') || upper.startsWith('G') ? upper : 'H' + upper;
+  const hasLetterSuffix = /[a-zA-Z]$/.test(normalized.slice(1));
   return db.prepare(
     `SELECT DISTINCT v.id, v.book_id, v.chapter, v.verse, v.original_text,
             b.language, b.abbreviation, b.name as book_name
      FROM words w
      JOIN verses v ON w.verse_id = v.id
      JOIN books b ON v.book_id = b.id
-     WHERE w.strongs = ?
+     WHERE ${hasLetterSuffix ? 'w.strongs = ?' : "w.strongs LIKE ? || '%'"}
      ORDER BY b.book_order, v.chapter, v.verse
      LIMIT ?`
   ).all(normalized, limit);
@@ -203,14 +209,17 @@ export function searchWords(query: string, limit = 50) {
   if (strongsMatch) {
     const num = strongsMatch[1];
     const prefix = trimmed.toUpperCase().startsWith('G') ? 'G' : 'H';
+    const strongsVal = prefix + num;
+    // Use prefix match to handle suffixed Strong's (e.g. H7218 matches H7218a, H7218b)
+    const hasLetterSuffix = /[a-zA-Z]$/.test(num);
     return db.prepare(
       `SELECT DISTINCT w.lemma, w.strongs, w.root_consonants, w.text as sample_text, w.morph as sample_morph,
               COUNT(*) as occurrence_count, b.language
        FROM words w
        JOIN verses v ON w.verse_id = v.id JOIN books b ON v.book_id = b.id
-       WHERE w.strongs = ?
+       WHERE ${hasLetterSuffix ? 'w.strongs = ?' : "w.strongs LIKE ? || '%'"}
        GROUP BY w.lemma ORDER BY occurrence_count DESC LIMIT ?`
-    ).all(prefix + num, limit);
+    ).all(strongsVal, limit);
   }
 
   // Detect Hebrew consonants (contains Hebrew Unicode)
