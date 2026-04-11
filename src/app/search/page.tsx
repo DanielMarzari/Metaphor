@@ -275,7 +275,7 @@ function SearchContent() {
         <h1 className="text-lg font-bold">Search</h1>
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-8">
+      <main className="px-6 py-8">
         {/* Mode Toggle */}
         <div className="flex gap-1 mb-4 p-1 rounded-lg inline-flex" style={{ backgroundColor: 'var(--surface-2)' }}>
           {[
