@@ -254,7 +254,9 @@ function runMigrations(db: Database.Database) {
           updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
         );
         INSERT INTO verse_metaphors_new (id, verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode, created_at, updated_at)
-          SELECT id, verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode, created_at, updated_at FROM verse_metaphors;
+          SELECT id, verse_id, metaphor_id, source_domain, target_domain, mapping, notes,
+            CASE confidence WHEN 'draft' THEN 'hypothesis' WHEN 'provisional' THEN 'hypothesis' WHEN 'disputed' THEN 'rejected' ELSE COALESCE(confidence, 'hypothesis') END,
+            linguistic_evidence, pseudocode, created_at, updated_at FROM verse_metaphors;
         DROP TABLE verse_metaphors;
         ALTER TABLE verse_metaphors_new RENAME TO verse_metaphors;
         CREATE INDEX IF NOT EXISTS idx_vm_verse ON verse_metaphors(verse_id);
@@ -295,7 +297,9 @@ function runMigrations(db: Database.Database) {
           updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
         INSERT INTO word_annotations_new (id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence, created_at, updated_at)
-          SELECT id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, COALESCE(confidence, 'hypothesis'), linguistic_evidence, created_at, updated_at FROM word_annotations;
+          SELECT id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode,
+            CASE confidence WHEN 'draft' THEN 'hypothesis' WHEN 'provisional' THEN 'hypothesis' WHEN 'disputed' THEN 'rejected' ELSE COALESCE(confidence, 'hypothesis') END,
+            linguistic_evidence, created_at, updated_at FROM word_annotations;
         DROP TABLE word_annotations;
         ALTER TABLE word_annotations_new RENAME TO word_annotations;
         CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);

@@ -66,6 +66,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [confidence, setConfidence] = useState('hypothesis');
   const [reservations, setReservations] = useState('');
   const [status, setStatus] = useState('active');
+  const [saving, setSaving] = useState(false);
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
 
   // Metaphor inline editing
@@ -304,7 +305,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   }
 
   async function handleSave() {
-    if (!selectionVerseId) return;
+    if (!selectionVerseId || saving) return;
+    setSaving(true);
+    try {
     let metaphorId = selectedMetaphor;
     if (!metaphorId && newMetaphorName.trim()) {
       const res = await fetch('/api/metaphors', {
@@ -349,6 +352,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     const aData = await aRes.json();
     setAnnotations(prev => new Map(prev).set(selectionVerseId!, aData));
     closePanel();
+    } finally { setSaving(false); }
   }
 
   async function handleDelete(annotationId: number, verseId: number) {
@@ -904,9 +908,10 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
               {/* Actions */}
               <div className="flex gap-3 pt-1 pb-2">
                 <button onClick={handleSave}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-white text-sm"
+                  disabled={saving}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{ backgroundColor: 'var(--primary)' }}>
-                  <Save className="w-4 h-4" /> {editingAnnotation ? 'Update' : 'Save'}
+                  <Save className="w-4 h-4" /> {saving ? 'Saving…' : editingAnnotation ? 'Update' : 'Save'}
                 </button>
                 {editingAnnotation && (
                   <button onClick={() => { handleDelete(editingAnnotation.id, selectionVerseId!); closePanel(); }}

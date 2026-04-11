@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Download } from 'lucide-react';
+import { ChevronLeft, Download, Database } from 'lucide-react';
 
 export default function ExportPage() {
   const [format, setFormat] = useState('csv');
@@ -76,9 +76,9 @@ export default function ExportPage() {
               <label className="block text-sm font-medium mb-1">Filter by Confidence</label>
               <select value={confidence} onChange={e => setConfidence(e.target.value)} className="w-full p-2 border rounded-lg text-sm" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
                 <option value="">All</option>
-                <option value="draft">Draft</option>
+                <option value="hypothesis">Hypothesis</option>
                 <option value="confirmed">Confirmed</option>
-                <option value="disputed">Disputed</option>
+                <option value="rejected">Rejected</option>
               </select>
             </div>
             <button onClick={handleExport}
@@ -88,7 +88,19 @@ export default function ExportPage() {
             </button>
           </div>
 
-          <div>
+          <div className="space-y-6">
+            <div className="p-4 rounded-lg border" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <h3 className="text-sm font-medium mb-2">Full Backup</h3>
+              <p className="text-xs mb-3" style={{ color: 'var(--muted)' }}>
+                Download a complete backup of all your annotations, metaphors, domain classes, notes, and settings as JSON.
+              </p>
+              <button onClick={() => window.open('/api/backup', '_blank')}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm text-white"
+                style={{ backgroundColor: 'var(--accent)' }}>
+                <Database className="w-4 h-4" /> Download Backup
+              </button>
+            </div>
+
             <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--muted)' }}>Preview (first 10)</h3>
             {preview.length > 0 ? (
               <div className="space-y-2 text-xs">

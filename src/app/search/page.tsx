@@ -73,6 +73,7 @@ function SearchContent() {
   const [mapping, setMapping] = useState('');
   const [notes, setNotes] = useState('');
   const [pseudocode, setPseudocode] = useState('');
+  const [saving, setSaving] = useState(false);
   const [confidence, setConfidence] = useState('hypothesis');
   const [reservations, setReservations] = useState('');
   const [status, setStatus] = useState('active');
@@ -180,6 +181,9 @@ function SearchContent() {
   }
 
   async function handleSave(lemma: string, language: string, strongs?: string) {
+    if (saving) return;
+    setSaving(true);
+    try {
     let metaphorId = selectedMetaphor;
 
     // Create new metaphor if needed
@@ -222,6 +226,7 @@ function SearchContent() {
 
     await loadWordAnnotations();
     closeAnnotationForm();
+    } finally { setSaving(false); }
   }
 
   async function handleMetaphorRename() {
@@ -595,9 +600,10 @@ function SearchContent() {
                           {/* Actions */}
                           <div className="flex gap-3 pt-1">
                             <button onClick={() => handleSave(w.lemma, w.language, w.strongs)}
-                              className="flex items-center gap-2 px-5 py-2 rounded-lg font-medium text-white text-sm"
+                              disabled={saving}
+                              className="flex items-center gap-2 px-5 py-2 rounded-lg font-medium text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                               style={{ backgroundColor: 'var(--primary)' }}>
-                              <Save className="w-4 h-4" /> {editingAnnotation ? 'Update' : 'Save'}
+                              <Save className="w-4 h-4" /> {saving ? 'Saving…' : editingAnnotation ? 'Update' : 'Save'}
                             </button>
                             <button onClick={closeAnnotationForm}
                               className="px-4 py-2 rounded-lg text-sm border"
