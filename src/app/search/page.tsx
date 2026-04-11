@@ -22,6 +22,8 @@ interface WordAnnotation {
   pseudocode: string;
   confidence: string;
   linguistic_evidence: string;
+  reservations: string;
+  status: string;
 }
 
 interface Metaphor {
@@ -71,8 +73,9 @@ function SearchContent() {
   const [mapping, setMapping] = useState('');
   const [notes, setNotes] = useState('');
   const [pseudocode, setPseudocode] = useState('');
-  const [confidence, setConfidence] = useState('draft');
-  const [linguisticEvidence, setLinguisticEvidence] = useState('');
+  const [confidence, setConfidence] = useState('hypothesis');
+  const [reservations, setReservations] = useState('');
+  const [status, setStatus] = useState('active');
 
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
@@ -150,8 +153,9 @@ function SearchContent() {
     setMapping('');
     setNotes('');
     setPseudocode('');
-    setConfidence('draft');
-    setLinguisticEvidence('');
+    setConfidence('hypothesis');
+    setReservations('');
+    setStatus('active');
   }
 
   function startAnnotating(lemma: string) {
@@ -170,8 +174,9 @@ function SearchContent() {
     setMapping(annotation.mapping || '');
     setNotes(annotation.notes || '');
     setPseudocode(annotation.pseudocode || '');
-    setConfidence(annotation.confidence || 'draft');
-    setLinguisticEvidence(annotation.linguistic_evidence || '');
+    setConfidence(annotation.confidence || 'hypothesis');
+    setReservations(annotation.reservations || '');
+    setStatus(annotation.status || 'active');
   }
 
   async function handleSave(lemma: string, language: string, strongs?: string) {
@@ -197,7 +202,8 @@ function SearchContent() {
       notes,
       pseudocode,
       confidence,
-      linguistic_evidence: linguisticEvidence,
+      reservations,
+      status,
     };
 
     if (editingAnnotation) {
@@ -347,9 +353,9 @@ function SearchContent() {
                   <div className="rounded-xl border overflow-hidden transition-shadow hover:shadow-sm"
                     style={{
                       backgroundColor: 'var(--verse-bg)',
-                      borderColor: isAnnotating ? 'var(--primary)' : annotations.length > 0 ? 'var(--provisional)' : 'var(--border)',
+                      borderColor: isAnnotating ? 'var(--primary)' : annotations.length > 0 ? 'var(--hypothesis)' : 'var(--border)',
                       borderLeftWidth: annotations.length > 0 ? '4px' : undefined,
-                      borderLeftColor: annotations.length > 0 ? 'var(--provisional)' : undefined,
+                      borderLeftColor: annotations.length > 0 ? 'var(--hypothesis)' : undefined,
                     }}>
 
                     {/* Word header: big text + metadata */}
@@ -372,8 +378,8 @@ function SearchContent() {
                             )}
                             {w.strongs && (
                               <span className="text-[11px] px-1.5 py-0.5 rounded font-mono" style={{
-                                backgroundColor: 'color-mix(in srgb, var(--provisional) 15%, transparent)',
-                                color: 'var(--provisional)',
+                                backgroundColor: 'color-mix(in srgb, var(--hypothesis) 15%, transparent)',
+                                color: 'var(--hypothesis)',
                               }}>
                                 {w.strongs}
                               </span>
@@ -410,7 +416,7 @@ function SearchContent() {
                       <div className="px-4 pb-2 space-y-2">
                         {annotations.map(a => (
                           <div key={a.id} className="flex items-start gap-2 p-2.5 rounded-lg border"
-                            style={{ borderColor: 'color-mix(in srgb, var(--' + (a.confidence || 'draft') + ') 30%, transparent)', backgroundColor: 'color-mix(in srgb, var(--' + (a.confidence || 'draft') + ') 5%, transparent)' }}>
+                            style={{ borderColor: 'color-mix(in srgb, var(--' + (a.confidence || 'hypothesis') + ') 30%, transparent)', backgroundColor: 'color-mix(in srgb, var(--' + (a.confidence || 'hypothesis') + ') 5%, transparent)' }}>
                             <div className="flex-1 min-w-0">
                               {a.metaphor_name && (
                                 <div className="text-sm font-semibold" style={{ color: 'var(--primary)' }}>{a.metaphor_name}</div>
@@ -424,8 +430,8 @@ function SearchContent() {
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-                                style={{ backgroundColor: `var(--${a.confidence || 'draft'})`, color: '#fff' }}>
-                                {(a.confidence || 'draft').slice(0, 4)}
+                                style={{ backgroundColor: `var(--${a.confidence || 'hypothesis'})`, color: '#fff' }}>
+                                {(a.confidence || 'hypothesis').slice(0, 4)}
                               </span>
                               <button onClick={() => startEditing(a)}
                                 className="p-1 rounded hover:opacity-70" style={{ color: 'var(--primary)' }}>
@@ -518,7 +524,7 @@ function SearchContent() {
                             </div>
                           </div>
 
-                          {/* Row 2: Mapping + Evidence + Confidence */}
+                          {/* Row 2: Mapping + Confidence + Status */}
                           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                             <div className="sm:col-span-2">
                               <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Mapping</label>
@@ -528,15 +534,9 @@ function SearchContent() {
                                 style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                             </div>
                             <div>
-                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Evidence</label>
-                              <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
-                                placeholder="Specific words..." className="w-full p-1.5 border rounded-lg text-sm"
-                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-                            </div>
-                            <div>
                               <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
                               <div className="flex flex-wrap gap-1">
-                                {['draft', 'provisional', 'confirmed', 'disputed'].map(c => (
+                                {['hypothesis', 'confirmed', 'rejected'].map(c => (
                                   <button key={c} onClick={() => setConfidence(c)}
                                     className="px-2 py-1 rounded-full text-[10px] font-medium transition-all"
                                     style={{
@@ -549,10 +549,26 @@ function SearchContent() {
                                 ))}
                               </div>
                             </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Status</label>
+                              <div className="flex gap-1">
+                                {['active', 'frozen'].map(s => (
+                                  <button key={s} onClick={() => setStatus(s)}
+                                    className="px-2.5 py-1 rounded-full text-[10px] font-medium transition-all"
+                                    style={{
+                                      backgroundColor: status === s ? `var(--${s})` : `color-mix(in srgb, var(--${s}) 10%, transparent)`,
+                                      color: status === s ? '#fff' : `var(--${s})`,
+                                      border: `1px solid color-mix(in srgb, var(--${s}) 40%, transparent)`,
+                                    }}>
+                                    {s}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           </div>
 
-                          {/* Notes + Pseudocode side by side */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Notes + Pseudocode + Reservations */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div>
                               <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
                               <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={10}
@@ -566,6 +582,13 @@ function SearchContent() {
                                 placeholder={"class TEMPORAL_CONTAINER extends CONTAINER\n  .originRegion = HEAD\n  בְּרֵאשִׁית instanceof TEMPORAL_CONTAINER"}
                                 className="w-full p-2 border rounded-lg text-xs resize-y font-mono"
                                 style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '200px', lineHeight: '1.6' }} />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Reservations / Questions</label>
+                              <textarea value={reservations} onChange={e => setReservations(e.target.value)} rows={10}
+                                placeholder="Open questions, counterarguments, alternative interpretations..."
+                                className="w-full p-2 border rounded-lg text-sm resize-y"
+                                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '200px' }} />
                             </div>
                           </div>
 
@@ -584,7 +607,7 @@ function SearchContent() {
                             {editingAnnotation && (
                               <button onClick={() => handleDelete(editingAnnotation.id)}
                                 className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm ml-auto"
-                                style={{ color: 'var(--disputed)', borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)', border: '1px solid' }}>
+                                style={{ color: 'var(--rejected)', borderColor: 'color-mix(in srgb, var(--rejected) 30%, transparent)', border: '1px solid' }}>
                                 <Trash2 className="w-3.5 h-3.5" /> Delete
                               </button>
                             )}

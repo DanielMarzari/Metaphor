@@ -279,7 +279,7 @@ export default function DomainsPage() {
                     <button onClick={() => setEditing(true)} className="px-3 py-1.5 rounded-lg border text-xs"
                       style={{ borderColor: 'var(--border)' }}>Edit</button>
                     <button onClick={() => handleDelete(selected)} className="px-3 py-1.5 rounded-lg border text-xs"
-                      style={{ borderColor: 'var(--border)', color: 'var(--disputed)' }}>Delete</button>
+                      style={{ borderColor: 'var(--border)', color: 'var(--rejected)' }}>Delete</button>
                   </div>
                 </div>
 
@@ -305,7 +305,7 @@ export default function DomainsPage() {
                           ) : (
                             <button onClick={() => handleDeleteProperty(p.id)}
                               className="opacity-30 hover:opacity-100 transition-opacity">
-                              <Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--disputed)' }} />
+                              <Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--rejected)' }} />
                             </button>
                           )}
                         </div>

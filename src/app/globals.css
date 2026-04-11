@@ -12,10 +12,11 @@
   --accent: #b8860b;
   --accent-light: #daa520;
   --verse-bg: #fdfcf8;
-  --draft: #d97706;
-  --provisional: #2563eb;
+  --hypothesis: #d97706;
   --confirmed: #059669;
-  --disputed: #dc2626;
+  --rejected: #dc2626;
+  --active: #2563eb;
+  --frozen: #6b7280;
 }
 
 .dark {
@@ -30,10 +31,11 @@
   --accent: #daa520;
   --accent-light: #f0c040;
   --verse-bg: #16162a;
-  --draft: #f59e0b;
-  --provisional: #60a5fa;
+  --hypothesis: #f59e0b;
   --confirmed: #10b981;
-  --disputed: #ef4444;
+  --rejected: #ef4444;
+  --active: #60a5fa;
+  --frozen: #9ca3af;
 }
 
 @theme inline {
@@ -48,10 +50,11 @@
   --color-accent: var(--accent);
   --color-accent-light: var(--accent-light);
   --color-verse-bg: var(--verse-bg);
-  --color-draft: var(--draft);
-  --color-provisional: var(--provisional);
+  --color-hypothesis: var(--hypothesis);
   --color-confirmed: var(--confirmed);
-  --color-disputed: var(--disputed);
+  --color-rejected: var(--rejected);
+  --color-active: var(--active);
+  --color-frozen: var(--frozen);
 }
 
 @font-face {

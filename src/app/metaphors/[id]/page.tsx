@@ -109,8 +109,8 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
           <h1 className="text-lg font-bold">{metaphor.name}</h1>
           <span className="text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wide font-medium"
             style={{
-              backgroundColor: metaphor.metaphor_type === 'lexical' ? 'color-mix(in srgb, var(--provisional) 15%, transparent)' : 'var(--surface-2)',
-              color: metaphor.metaphor_type === 'lexical' ? 'var(--provisional)' : 'var(--muted)',
+              backgroundColor: metaphor.metaphor_type === 'lexical' ? 'color-mix(in srgb, var(--active) 15%, transparent)' : 'var(--surface-2)',
+              color: metaphor.metaphor_type === 'lexical' ? 'var(--active)' : 'var(--muted)',
             }}>
             {metaphor.metaphor_type || 'conceptual'}
           </span>
@@ -119,7 +119,7 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
           <button onClick={() => setEditing(!editing)} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)' }}>
             {editing ? <X className="w-4 h-4" /> : <Edit3 className="w-4 h-4" />}
           </button>
-          <button onClick={handleDelete} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--disputed)' }}>
+          <button onClick={handleDelete} className="p-2 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--rejected)' }}>
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
@@ -226,7 +226,7 @@ export default function MetaphorDetailPage({ params }: { params: Promise<{ id: s
                 <div className="flex items-center gap-3">
                   <span className="text-xs" style={{ color: 'var(--muted)' }}>{c.usage_count} uses</span>
                   <button onClick={() => handleRemoveChild(c.id)}
-                    className="text-xs hover:opacity-70" style={{ color: 'var(--disputed)' }}>
+                    className="text-xs hover:opacity-70" style={{ color: 'var(--rejected)' }}>
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>

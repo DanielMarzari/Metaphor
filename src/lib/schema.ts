@@ -55,10 +55,13 @@ export function initializeSchema(db: Database.Database) {
       target_domain       TEXT,
       mapping             TEXT,
       notes               TEXT,
-      confidence          TEXT NOT NULL DEFAULT 'draft'
-                            CHECK(confidence IN ('draft','provisional','confirmed','disputed')),
+      confidence          TEXT NOT NULL DEFAULT 'hypothesis'
+                            CHECK(confidence IN ('hypothesis','confirmed','rejected')),
       linguistic_evidence TEXT,
       pseudocode      TEXT,
+      reservations    TEXT,
+      status          TEXT NOT NULL DEFAULT 'active'
+                        CHECK(status IN ('active','frozen')),
       created_at          TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -199,8 +202,12 @@ function runMigrations(db: Database.Database) {
     { table: 'word_annotations', column: 'target_domain', definition: 'TEXT' },
     { table: 'word_annotations', column: 'mapping', definition: 'TEXT' },
     { table: 'word_annotations', column: 'pseudocode', definition: 'TEXT' },
-    { table: 'word_annotations', column: 'confidence', definition: "TEXT NOT NULL DEFAULT 'draft'" },
+    { table: 'word_annotations', column: 'confidence', definition: "TEXT NOT NULL DEFAULT 'hypothesis'" },
     { table: 'word_annotations', column: 'linguistic_evidence', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'reservations', definition: 'TEXT' },
+    { table: 'word_annotations', column: 'status', definition: "TEXT NOT NULL DEFAULT 'active'" },
+    { table: 'verse_metaphors', column: 'reservations', definition: 'TEXT' },
+    { table: 'verse_metaphors', column: 'status', definition: "TEXT NOT NULL DEFAULT 'active'" },
   ];
 
   for (const m of migrations) {
@@ -210,6 +217,54 @@ function runMigrations(db: Database.Database) {
       db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.definition}`);
       console.log(`  [migration] Added ${m.table}.${m.column}`);
     }
+  }
+
+  // Migrate confidence values: draft/provisional → hypothesis, disputed → rejected
+  try {
+    db.exec(`UPDATE verse_metaphors SET confidence = 'hypothesis' WHERE confidence IN ('draft', 'provisional')`);
+    db.exec(`UPDATE verse_metaphors SET confidence = 'rejected' WHERE confidence = 'disputed'`);
+    db.exec(`UPDATE word_annotations SET confidence = 'hypothesis' WHERE confidence IN ('draft', 'provisional')`);
+    db.exec(`UPDATE word_annotations SET confidence = 'rejected' WHERE confidence = 'disputed'`);
+  } catch (e) { /* tables may not exist yet */ }
+
+  // Migrate verse_metaphors CHECK constraint to new confidence values
+  try {
+    const vmInfo = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='verse_metaphors'"
+    ).get() as { sql: string } | undefined;
+    if (vmInfo?.sql?.includes("'draft'") || vmInfo?.sql?.includes("'provisional'")) {
+      console.log('  [migration] Updating verse_metaphors confidence constraint...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS verse_metaphors_new (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          verse_id            INTEGER NOT NULL REFERENCES verses(id),
+          metaphor_id         INTEGER NOT NULL REFERENCES metaphors(id),
+          source_domain       TEXT,
+          target_domain       TEXT,
+          mapping             TEXT,
+          notes               TEXT,
+          confidence          TEXT NOT NULL DEFAULT 'hypothesis'
+                                CHECK(confidence IN ('hypothesis','confirmed','rejected')),
+          linguistic_evidence TEXT,
+          pseudocode          TEXT,
+          reservations        TEXT,
+          status              TEXT NOT NULL DEFAULT 'active'
+                                CHECK(status IN ('active','frozen')),
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO verse_metaphors_new (id, verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode, created_at, updated_at)
+          SELECT id, verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode, created_at, updated_at FROM verse_metaphors;
+        DROP TABLE verse_metaphors;
+        ALTER TABLE verse_metaphors_new RENAME TO verse_metaphors;
+        CREATE INDEX IF NOT EXISTS idx_vm_verse ON verse_metaphors(verse_id);
+        CREATE INDEX IF NOT EXISTS idx_vm_metaphor ON verse_metaphors(metaphor_id);
+        CREATE INDEX IF NOT EXISTS idx_vm_confidence ON verse_metaphors(confidence);
+      `);
+      console.log('  [migration] verse_metaphors constraint updated.');
+    }
+  } catch (e) {
+    console.log('  [migration] verse_metaphors constraint migration skipped:', e);
   }
 
   // Remove UNIQUE(lemma, language) from word_annotations (allow multiple annotations per lemma)
@@ -232,13 +287,15 @@ function runMigrations(db: Database.Database) {
           target_domain TEXT,
           mapping     TEXT,
           pseudocode  TEXT,
-          confidence  TEXT NOT NULL DEFAULT 'draft',
+          confidence  TEXT NOT NULL DEFAULT 'hypothesis',
           linguistic_evidence TEXT,
+          reservations TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
           created_at  TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
         INSERT INTO word_annotations_new (id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence, created_at, updated_at)
-          SELECT id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, COALESCE(confidence, 'draft'), linguistic_evidence, created_at, updated_at FROM word_annotations;
+          SELECT id, lemma, strongs, language, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, COALESCE(confidence, 'hypothesis'), linguistic_evidence, created_at, updated_at FROM word_annotations;
         DROP TABLE word_annotations;
         ALTER TABLE word_annotations_new RENAME TO word_annotations;
         CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);

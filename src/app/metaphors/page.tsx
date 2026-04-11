@@ -158,8 +158,8 @@ export default function MetaphorsPage() {
                       <p className="font-medium" style={{ color: 'var(--accent)' }}>{m.name}</p>
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wide font-medium"
                         style={{
-                          backgroundColor: m.metaphor_type === 'lexical' ? 'color-mix(in srgb, var(--provisional) 15%, transparent)' : 'var(--surface-2)',
-                          color: m.metaphor_type === 'lexical' ? 'var(--provisional)' : 'var(--muted)',
+                          backgroundColor: m.metaphor_type === 'lexical' ? 'color-mix(in srgb, var(--active) 15%, transparent)' : 'var(--surface-2)',
+                          color: m.metaphor_type === 'lexical' ? 'var(--active)' : 'var(--muted)',
                         }}>
                         {m.metaphor_type || 'conceptual'}
                       </span>
@@ -173,7 +173,7 @@ export default function MetaphorsPage() {
                 </Link>
                 <button onClick={(e) => handleDelete(e, m)}
                   className="p-2 rounded-lg border hover:shadow-sm transition-all shrink-0"
-                  style={{ borderColor: 'var(--border)', color: 'var(--disputed)' }}
+                  style={{ borderColor: 'var(--border)', color: 'var(--rejected)' }}
                   title="Delete metaphor">
                   <Trash2 className="w-4 h-4" />
                 </button>

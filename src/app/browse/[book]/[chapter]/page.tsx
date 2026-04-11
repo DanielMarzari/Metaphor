@@ -19,6 +19,7 @@ interface Annotation {
   id: number; verse_id: number; metaphor_id: number; metaphor_name: string;
   source_domain: string; target_domain: string; mapping: string; notes: string;
   pseudocode: string; confidence: string; linguistic_evidence: string;
+  reservations: string; status: string;
   metaphor_category: string; word_ids: number[];
 }
 
@@ -30,7 +31,7 @@ interface WordAnnotationData {
   annotation_id: number; lemma: string; gloss: string; notes: string; strongs: string;
   metaphor_id: number | null; metaphor_name: string | null; source_domain: string;
   target_domain: string; mapping: string; pseudocode: string; confidence: string;
-  linguistic_evidence: string;
+  linguistic_evidence: string; reservations: string; status: string;
 }
 
 // --- Component ---
@@ -62,8 +63,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
   const [mapping, setMapping] = useState('');
   const [notes, setNotes] = useState('');
   const [pseudocode, setPseudocode] = useState('');
-  const [confidence, setConfidence] = useState('draft');
-  const [linguisticEvidence, setLinguisticEvidence] = useState('');
+  const [confidence, setConfidence] = useState('hypothesis');
+  const [reservations, setReservations] = useState('');
+  const [status, setStatus] = useState('active');
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
 
   // Metaphor inline editing
@@ -208,8 +210,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       setMapping(annotation.mapping || '');
       setNotes(annotation.notes || '');
       setPseudocode(annotation.pseudocode || '');
-      setConfidence(annotation.confidence);
-      setLinguisticEvidence(annotation.linguistic_evidence || '');
+      setConfidence(annotation.confidence || 'hypothesis');
+      setReservations(annotation.reservations || '');
+      setStatus(annotation.status || 'active');
       setSelectedWordIds(new Set(annotation.word_ids || []));
       setSelectionVerseId(annotation.verse_id);
     } else {
@@ -230,8 +233,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
     setMapping('');
     setNotes('');
     setPseudocode('');
-    setConfidence('draft');
-    setLinguisticEvidence('');
+    setConfidence('hypothesis');
+    setReservations('');
+    setStatus('active');
   }
 
   function closePanel() {
@@ -324,7 +328,8 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
       notes: notes || undefined,
       pseudocode: pseudocode || undefined,
       confidence,
-      linguistic_evidence: linguisticEvidence || undefined,
+      reservations: reservations || undefined,
+      status,
       word_ids: Array.from(selectedWordIds),
     };
     if (editingAnnotation) {
@@ -572,9 +577,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                         href={`/search?q=${wa.strongs || wa.lemma}&edit=${wa.annotation_id}`}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
                         style={{
-                          backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 15%, transparent)`,
-                          color: `var(--${wa.confidence || 'draft'})`,
-                          border: `1px solid color-mix(in srgb, var(--${wa.confidence || 'draft'}) 30%, transparent)`,
+                          backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'hypothesis'}) 15%, transparent)`,
+                          color: `var(--${wa.confidence || 'hypothesis'})`,
+                          border: `1px solid color-mix(in srgb, var(--${wa.confidence || 'hypothesis'}) 30%, transparent)`,
                         }}>
                         <BookOpen className="w-3 h-3" />
                         {wa.metaphor_name || wa.gloss || wa.strongs || wa.lemma}
@@ -695,9 +700,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     href={`/search?q=${searchQ}&edit=${wa.annotation_id}`}
                     className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs hover:opacity-80 transition-opacity border"
                     style={{
-                      backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 8%, transparent)`,
-                      borderColor: `color-mix(in srgb, var(--${wa.confidence || 'draft'}) 30%, transparent)`,
-                      color: `var(--${wa.confidence || 'draft'})`,
+                      backgroundColor: `color-mix(in srgb, var(--${wa.confidence || 'hypothesis'}) 8%, transparent)`,
+                      borderColor: `color-mix(in srgb, var(--${wa.confidence || 'hypothesis'}) 30%, transparent)`,
+                      color: `var(--${wa.confidence || 'hypothesis'})`,
                     }}>
                     <Tag className="w-3 h-3 shrink-0" />
                     <span className="font-medium truncate">{wa.metaphor_name || wa.gloss || 'Annotation'}</span>
@@ -828,7 +833,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                 </div>
               </div>
 
-              {/* Second compact row: mapping + evidence + confidence */}
+              {/* Second compact row: mapping + confidence + status */}
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Mapping</label>
@@ -838,15 +843,9 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Evidence</label>
-                  <input type="text" value={linguisticEvidence} onChange={e => setLinguisticEvidence(e.target.value)}
-                    placeholder="Specific words..." className="w-full p-1.5 border rounded-lg text-sm"
-                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }} />
-                </div>
-                <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Confidence</label>
                   <div className="flex flex-wrap gap-1">
-                    {['draft', 'provisional', 'confirmed', 'disputed'].map(c => (
+                    {['hypothesis', 'confirmed', 'rejected'].map(c => (
                       <button key={c} onClick={() => setConfidence(c)}
                         className="px-2 py-1 rounded-full text-[10px] font-medium transition-all"
                         style={{
@@ -859,10 +858,26 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     ))}
                   </div>
                 </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Status</label>
+                  <div className="flex gap-1">
+                    {['active', 'frozen'].map(s => (
+                      <button key={s} onClick={() => setStatus(s)}
+                        className="px-2.5 py-1 rounded-full text-[10px] font-medium transition-all"
+                        style={{
+                          backgroundColor: status === s ? `var(--${s})` : `color-mix(in srgb, var(--${s}) 10%, transparent)`,
+                          color: status === s ? '#fff' : `var(--${s})`,
+                          border: `1px solid color-mix(in srgb, var(--${s}) 40%, transparent)`,
+                        }}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              {/* Notes + Pseudocode side by side */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Notes + Pseudocode + Reservations */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Notes</label>
                   <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={14}
@@ -877,6 +892,13 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                     className="w-full p-2 border rounded-lg text-xs resize-y font-mono"
                     style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '300px', lineHeight: '1.6' }} />
                 </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--muted)' }}>Reservations / Questions</label>
+                  <textarea value={reservations} onChange={e => setReservations(e.target.value)} rows={14}
+                    placeholder="Open questions, counterarguments, alternative interpretations..."
+                    className="w-full p-2 border rounded-lg text-sm resize-y"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)', minHeight: '300px' }} />
+                </div>
               </div>
 
               {/* Actions */}
@@ -889,7 +911,7 @@ export default function ChapterPage({ params }: { params: Promise<{ book: string
                 {editingAnnotation && (
                   <button onClick={() => { handleDelete(editingAnnotation.id, selectionVerseId!); closePanel(); }}
                     className="px-4 py-2.5 rounded-lg text-sm border"
-                    style={{ color: 'var(--disputed)', borderColor: 'color-mix(in srgb, var(--disputed) 30%, transparent)' }}>
+                    style={{ color: 'var(--rejected)', borderColor: 'color-mix(in srgb, var(--rejected) 30%, transparent)' }}>
                     <Trash2 className="w-4 h-4" />
                   </button>
                 )}

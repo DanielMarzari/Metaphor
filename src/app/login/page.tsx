@@ -48,9 +48,9 @@ export default function LoginPage() {
                 style={{ borderColor: 'var(--border)' }} />
             </div>
             {error && (
-              <div className="flex items-center gap-2 p-3 rounded-lg" style={{ backgroundColor: 'color-mix(in srgb, var(--disputed) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--disputed) 30%, transparent)' }}>
-                <AlertCircle className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--disputed)' }} />
-                <p className="text-sm" style={{ color: 'var(--disputed)' }}>{error}</p>
+              <div className="flex items-center gap-2 p-3 rounded-lg" style={{ backgroundColor: 'color-mix(in srgb, var(--rejected) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--rejected) 30%, transparent)' }}>
+                <AlertCircle className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--rejected)' }} />
+                <p className="text-sm" style={{ color: 'var(--rejected)' }}>{error}</p>
               </div>
             )}
             <button type="submit" disabled={loading || !password}

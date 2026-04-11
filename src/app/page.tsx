@@ -18,9 +18,9 @@ const NOTE_TYPES = ['general', 'methodology', 'philosophy', 'todo'] as const;
 
 const NOTE_TYPE_COLORS: Record<string, string> = {
   general: 'var(--muted)',
-  methodology: 'var(--provisional)',
+  methodology: 'var(--active)',
   philosophy: 'var(--accent)',
-  todo: 'var(--draft)',
+  todo: 'var(--hypothesis)',
 };
 
 export default function DashboardPage() {
@@ -171,7 +171,7 @@ export default function DashboardPage() {
                 className="h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2"
                 style={{
                   width: `${Math.max(wordAnnotationPct, wordAnnotationPct > 0 ? 2 : 0)}%`,
-                  backgroundColor: 'var(--provisional)',
+                  backgroundColor: 'var(--active)',
                 }}
               >
                 {wordAnnotationPct >= 5 && (
@@ -180,7 +180,7 @@ export default function DashboardPage() {
               </div>
             </div>
             {wordAnnotationPct > 0 && wordAnnotationPct < 5 && (
-              <span className="text-xs font-bold mt-1 inline-block" style={{ color: 'var(--provisional)' }}>{wordAnnotationPct}%</span>
+              <span className="text-xs font-bold mt-1 inline-block" style={{ color: 'var(--active)' }}>{wordAnnotationPct}%</span>
             )}
             <p className="text-sm mt-2" style={{ color: 'var(--muted)' }}>
               {(stats.annotatedLemmas || 0).toLocaleString()} of {(stats.totalUniqueLemmas || 0).toLocaleString()} unique lemmas annotated
@@ -193,7 +193,7 @@ export default function DashboardPage() {
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
           <StatCard icon={<BookOpen className="w-5 h-5" />} label="Verses" value={stats?.totalVerses?.toLocaleString() || '—'} />
-          <StatCard icon={<Hash className="w-5 h-5" />} label="Lemmas" value={stats?.annotatedLemmas?.toLocaleString() || '0'} color="var(--provisional)" />
+          <StatCard icon={<Hash className="w-5 h-5" />} label="Lemmas" value={stats?.annotatedLemmas?.toLocaleString() || '0'} color="var(--active)" />
           <StatCard icon={<Tag className="w-5 h-5" />} label="Metaphors" value={stats?.totalMetaphors || '0'} />
           <StatCard icon={<FileText className="w-5 h-5" />} label="Annotations" value={stats?.totalAnnotations || '0'} />
           <StatCard icon={<TrendingUp className="w-5 h-5" />} label="Confirmed" value={confidence.confirmed || '0'} color="var(--confirmed)" />
@@ -202,13 +202,13 @@ export default function DashboardPage() {
         {/* Confidence Breakdown */}
         {stats?.totalAnnotations > 0 && (
           <div className="flex gap-3 mb-8">
-            <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--draft) 15%, transparent)', color: 'var(--draft)' }}>
+            <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--hypothesis) 15%, transparent)', color: 'var(--hypothesis)' }}>
               {confidence.draft || 0} draft
             </span>
             <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--confirmed) 15%, transparent)', color: 'var(--confirmed)' }}>
               {confidence.confirmed || 0} confirmed
             </span>
-            <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--disputed) 15%, transparent)', color: 'var(--disputed)' }}>
+            <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ backgroundColor: 'color-mix(in srgb, var(--rejected) 15%, transparent)', color: 'var(--rejected)' }}>
               {confidence.disputed || 0} disputed
             </span>
           </div>
@@ -357,7 +357,7 @@ export default function DashboardPage() {
                             className="p-1 rounded hover:bg-black/5 transition-colors"
                             title="Delete"
                           >
-                            <X className="w-3.5 h-3.5" style={{ color: 'var(--disputed)' }} />
+                            <X className="w-3.5 h-3.5" style={{ color: 'var(--rejected)' }} />
                           </button>
                         </div>
                       </div>

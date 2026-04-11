@@ -288,7 +288,7 @@ export function getAnnotatedLemmasForChapter(bookId: number, chapter: number) {
   return db.prepare(
     `SELECT wa.id as annotation_id, wa.lemma, wa.gloss, wa.notes, wa.strongs,
             wa.metaphor_id, wa.source_domain, wa.target_domain, wa.mapping, wa.pseudocode,
-            wa.confidence, wa.linguistic_evidence, m.name as metaphor_name
+            wa.confidence, wa.linguistic_evidence, wa.reservations, wa.status, m.name as metaphor_name
      FROM word_annotations wa
      JOIN books b ON wa.language = b.language AND b.id = ?
      LEFT JOIN metaphors m ON wa.metaphor_id = m.id
@@ -303,15 +303,17 @@ export function createWordAnnotation(data: {
   lemma: string; language: string; strongs?: string; gloss?: string; notes?: string;
   metaphor_id?: number; source_domain?: string; target_domain?: string; mapping?: string;
   pseudocode?: string; confidence?: string; linguistic_evidence?: string;
+  reservations?: string; status?: string;
 }) {
   const db = ensureSchema();
   return db.prepare(
-    `INSERT INTO word_annotations (lemma, language, strongs, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO word_annotations (lemma, language, strongs, gloss, notes, metaphor_id, source_domain, target_domain, mapping, pseudocode, confidence, linguistic_evidence, reservations, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     data.lemma, data.language, data.strongs || null, data.gloss || null, data.notes || null,
     data.metaphor_id || null, data.source_domain || null, data.target_domain || null,
-    data.mapping || null, data.pseudocode || null, data.confidence || 'draft', data.linguistic_evidence || null
+    data.mapping || null, data.pseudocode || null, data.confidence || 'hypothesis', data.linguistic_evidence || null,
+    data.reservations || null, data.status || 'active'
   );
 }
 
@@ -319,6 +321,7 @@ export function updateWordAnnotation(id: number, data: {
   gloss?: string; notes?: string; strongs?: string;
   metaphor_id?: number; source_domain?: string; target_domain?: string; mapping?: string;
   pseudocode?: string; confidence?: string; linguistic_evidence?: string;
+  reservations?: string; status?: string;
 }) {
   const db = ensureSchema();
   const sets: string[] = [];
@@ -333,6 +336,8 @@ export function updateWordAnnotation(id: number, data: {
   if (data.pseudocode !== undefined) { sets.push('pseudocode = ?'); values.push(data.pseudocode); }
   if (data.confidence !== undefined) { sets.push('confidence = ?'); values.push(data.confidence); }
   if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
+  if (data.reservations !== undefined) { sets.push('reservations = ?'); values.push(data.reservations); }
+  if (data.status !== undefined) { sets.push('status = ?'); values.push(data.status); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   return db.prepare(`UPDATE word_annotations SET ${sets.join(', ')} WHERE id = ?`).run(...values);
@@ -396,18 +401,21 @@ export function createAnnotation(data: {
   confidence?: string;
   linguistic_evidence?: string;
   pseudocode?: string;
+  reservations?: string;
+  status?: string;
   word_ids?: number[];
 }) {
   const db = ensureSchema();
   const result = db.prepare(
-    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO verse_metaphors (verse_id, metaphor_id, source_domain, target_domain, mapping, notes, confidence, linguistic_evidence, pseudocode, reservations, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     data.verse_id, data.metaphor_id,
     data.source_domain || null, data.target_domain || null,
     data.mapping || null,
-    data.notes || null, data.confidence || 'draft',
-    data.linguistic_evidence || null, data.pseudocode || null
+    data.notes || null, data.confidence || 'hypothesis',
+    data.linguistic_evidence || null, data.pseudocode || null,
+    data.reservations || null, data.status || 'active'
   );
 
   // Link selected words
@@ -431,6 +439,8 @@ export function updateAnnotation(id: number, data: {
   confidence?: string;
   linguistic_evidence?: string;
   pseudocode?: string;
+  reservations?: string;
+  status?: string;
   metaphor_id?: number;
   word_ids?: number[];
 }) {
@@ -445,6 +455,8 @@ export function updateAnnotation(id: number, data: {
   if (data.confidence !== undefined) { sets.push('confidence = ?'); values.push(data.confidence); }
   if (data.linguistic_evidence !== undefined) { sets.push('linguistic_evidence = ?'); values.push(data.linguistic_evidence); }
   if (data.pseudocode !== undefined) { sets.push('pseudocode = ?'); values.push(data.pseudocode); }
+  if (data.reservations !== undefined) { sets.push('reservations = ?'); values.push(data.reservations); }
+  if (data.status !== undefined) { sets.push('status = ?'); values.push(data.status); }
   sets.push("updated_at = datetime('now')");
   values.push(id);
   db.prepare(`UPDATE verse_metaphors SET ${sets.join(', ')} WHERE id = ?`).run(...values);
