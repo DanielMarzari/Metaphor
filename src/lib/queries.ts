@@ -835,3 +835,88 @@ export function getExportData(filters?: { book_id?: number; metaphor_id?: number
      ORDER BY b.book_order, v.chapter, v.verse, m.name`
   ).all(...params);
 }
+
+// --- Lemma Equations ---
+
+// For a given lemma (by strongs or lemma+language), return every occurrence with:
+// - word_id, text, verse reference
+// - any prefix words in the same word_group that come before it (prepositions/conjunctions/article)
+// - saved modifier text
+export function getLemmaEquationEntries(
+  opts: { strongs?: string; lemma?: string; language?: string },
+  limit = 500
+) {
+  const db = ensureSchema();
+  let whereClause: string;
+  const params: any[] = [];
+  if (opts.strongs) {
+    const prefix = opts.strongs.match(/^[HhGg]/)?.[0]?.toUpperCase() || 'H';
+    const rest = opts.strongs.replace(/^[HhGg]/, '') || opts.strongs;
+    const normalized = (opts.strongs.match(/^[HhGg]/) ? prefix : 'H') + rest;
+    const hasLetterSuffix = /[a-zA-Z]$/.test(normalized.slice(1));
+    whereClause = hasLetterSuffix ? 'w.strongs = ?' : "w.strongs LIKE ? || '%'";
+    params.push(normalized);
+  } else if (opts.lemma && opts.language) {
+    whereClause = 'w.lemma = ? AND b.language = ?';
+    params.push(opts.lemma, opts.language);
+  } else {
+    return [];
+  }
+  params.push(limit);
+
+  const occurrences = db.prepare(
+    `SELECT w.id as word_id, w.text, w.lemma, w.strongs, w.morph, w.word_order, w.word_group, w.verse_id,
+            v.chapter, v.verse, b.name as book_name, b.abbreviation, b.language
+     FROM words w
+     JOIN verses v ON w.verse_id = v.id
+     JOIN books b ON v.book_id = b.id
+     WHERE ${whereClause}
+     ORDER BY b.book_order, v.chapter, v.verse, w.word_order
+     LIMIT ?`
+  ).all(...params) as any[];
+
+  if (occurrences.length === 0) return [];
+
+  const prefixStmt = db.prepare(
+    `SELECT id, text, lemma, morph, word_order
+     FROM words
+     WHERE verse_id = ? AND word_group = ? AND word_order < ?
+     ORDER BY word_order`
+  );
+
+  const equationStmt = db.prepare('SELECT modifier FROM lemma_equations WHERE word_id = ?');
+
+  return occurrences.map(o => {
+    const prefixes = prefixStmt.all(o.verse_id, o.word_group, o.word_order) as any[];
+    const eq = equationStmt.get(o.word_id) as { modifier: string } | undefined;
+    return {
+      word_id: o.word_id,
+      text: o.text,
+      lemma: o.lemma,
+      strongs: o.strongs,
+      morph: o.morph,
+      verse_id: o.verse_id,
+      book_name: o.book_name,
+      abbreviation: o.abbreviation,
+      chapter: o.chapter,
+      verse: o.verse,
+      language: o.language,
+      prefixes,
+      modifier: eq?.modifier || '',
+    };
+  });
+}
+
+export function upsertLemmaEquation(word_id: number, modifier: string | null) {
+  const db = ensureSchema();
+  const trimmed = (modifier || '').trim();
+  if (!trimmed) {
+    db.prepare('DELETE FROM lemma_equations WHERE word_id = ?').run(word_id);
+    return { word_id, modifier: '' };
+  }
+  db.prepare(
+    `INSERT INTO lemma_equations (word_id, modifier) VALUES (?, ?)
+     ON CONFLICT(word_id) DO UPDATE SET modifier = excluded.modifier, updated_at = datetime('now')`
+  ).run(word_id, trimmed);
+  return { word_id, modifier: trimmed };
+}

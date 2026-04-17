@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Plus, X } from 'lucide-react';
+import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Plus, X, Network } from 'lucide-react';
 import { decodeMorph } from '@/lib/morph-decoder';
 
 interface WordAnnotation {
@@ -77,6 +77,12 @@ function SearchContent() {
   const [confidence, setConfidence] = useState('hypothesis');
   const [reservations, setReservations] = useState('');
   const [status, setStatus] = useState('active');
+
+  // Lemma equations state
+  const [equationsLemma, setEquationsLemma] = useState<string | null>(null);
+  const [equationEntries, setEquationEntries] = useState<any[]>([]);
+  const [equationInputs, setEquationInputs] = useState<Record<number, string>>({});
+  const [savingWordIds, setSavingWordIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
@@ -254,6 +260,37 @@ function SearchContent() {
     closeAnnotationForm();
   }
 
+  async function toggleEquations(lemma: string, language: string, strongs?: string) {
+    if (equationsLemma === lemma) {
+      setEquationsLemma(null);
+      setEquationEntries([]);
+      setEquationInputs({});
+      return;
+    }
+    setEquationsLemma(lemma);
+    const param = strongs ? `strongs=${encodeURIComponent(strongs)}` : `lemma=${encodeURIComponent(lemma)}&language=${language}`;
+    const res = await fetch(`/api/lemma-equations?${param}`);
+    const data: any[] = await res.json();
+    setEquationEntries(data);
+    const inputs: Record<number, string> = {};
+    for (const e of data) inputs[e.word_id] = e.modifier || '';
+    setEquationInputs(inputs);
+  }
+
+  async function saveEquationEntry(word_id: number, modifier: string) {
+    setSavingWordIds(prev => { const next = new Set(prev); next.add(word_id); return next; });
+    try {
+      await fetch('/api/lemma-equations', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word_id, modifier }),
+      });
+      setEquationEntries(prev => prev.map(e => e.word_id === word_id ? { ...e, modifier } : e));
+    } finally {
+      setSavingWordIds(prev => { const next = new Set(prev); next.delete(word_id); return next; });
+    }
+  }
+
   async function expandLemma(lemma: string, language: string, strongs?: string) {
     if (expandedLemma === lemma) {
       setExpandedLemma(null);
@@ -406,6 +443,16 @@ function SearchContent() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0 pt-1">
+                          <button onClick={() => toggleEquations(w.lemma, w.language, w.strongs)}
+                            className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
+                            style={{
+                              borderColor: equationsLemma === w.lemma ? 'var(--accent)' : 'var(--border)',
+                              color: equationsLemma === w.lemma ? 'var(--accent)' : 'var(--muted)',
+                              backgroundColor: equationsLemma === w.lemma ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined,
+                            }}
+                            title="Equations">
+                            <Network className="w-3.5 h-3.5" />
+                          </button>
                           <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}
                             className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
                             style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
@@ -640,6 +687,19 @@ function SearchContent() {
                       ))}
                     </div>
                   )}
+
+                  {/* Expanded: equations diagram */}
+                  {equationsLemma === w.lemma && (
+                    <EquationsDiagram
+                      lemma={w.sample_text || w.lemma}
+                      isHebrew={isHebrew}
+                      entries={equationEntries}
+                      inputs={equationInputs}
+                      setInputs={setEquationInputs}
+                      savingWordIds={savingWordIds}
+                      onSave={saveEquationEntry}
+                    />
+                  )}
                 </div>
                 );
               })}
@@ -654,6 +714,134 @@ function SearchContent() {
           <p className="text-center py-12" style={{ color: 'var(--muted)' }}>No word matches found for &quot;{query}&quot;</p>
         )}
       </main>
+    </div>
+  );
+}
+
+interface EquationEntry {
+  word_id: number;
+  text: string;
+  lemma: string;
+  verse_id: number;
+  book_name: string;
+  abbreviation: string;
+  chapter: number;
+  verse: number;
+  language: string;
+  prefixes: { id: number; text: string; lemma: string; morph: string; word_order: number }[];
+  modifier: string;
+}
+
+function EquationsDiagram({
+  lemma, isHebrew, entries, inputs, setInputs, savingWordIds, onSave,
+}: {
+  lemma: string;
+  isHebrew: boolean;
+  entries: EquationEntry[];
+  inputs: Record<number, string>;
+  setInputs: React.Dispatch<React.SetStateAction<Record<number, string>>>;
+  savingWordIds: Set<number>;
+  onSave: (word_id: number, modifier: string) => Promise<void>;
+}) {
+  if (entries.length === 0) {
+    return (
+      <div className="ml-4 mt-1 mb-2 p-4 rounded-lg border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>No occurrences found for this lemma.</p>
+      </div>
+    );
+  }
+
+  // Aggregate unique prefix texts across all entries (de-duped by text)
+  const uniquePrefixes = new Map<string, { text: string; lemma: string; count: number }>();
+  for (const e of entries) {
+    for (const p of e.prefixes) {
+      const key = p.text || p.lemma;
+      const existing = uniquePrefixes.get(key);
+      if (existing) existing.count++;
+      else uniquePrefixes.set(key, { text: p.text, lemma: p.lemma, count: 1 });
+    }
+  }
+  const prefixList = Array.from(uniquePrefixes.values());
+
+  const textClass = isHebrew ? 'hebrew-text' : 'greek-text';
+
+  return (
+    <div className="mt-2 mb-2 p-5 rounded-lg border" style={{ borderColor: 'var(--accent)', backgroundColor: 'var(--surface)' }}>
+      <div className="flex items-center gap-2 mb-4">
+        <Network className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>
+          Equations · {entries.length} occurrence{entries.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div className="flex items-start gap-4" style={{ alignItems: 'flex-start' }}>
+        {/* Prefixes column (sticky) */}
+        <div className="sticky top-4 flex flex-col gap-2 pr-4 border-r self-start"
+          style={{ borderColor: 'var(--border)', minWidth: '80px' }}>
+          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Prefixes</span>
+          {prefixList.length === 0 ? (
+            <span className="text-xs italic" style={{ color: 'var(--muted)' }}>(none)</span>
+          ) : (
+            prefixList.map((p, i) => (
+              <div key={i} className="flex items-center gap-2 justify-end">
+                <span className={`text-xl font-semibold ${textClass}`}>{p.text}</span>
+                {p.count > 1 && (
+                  <span className="text-[10px] px-1 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
+                    ×{p.count}
+                  </span>
+                )}
+                <span className="text-[var(--muted)]" aria-hidden>→</span>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Lemma column (sticky) */}
+        <div className="sticky top-4 flex flex-col items-center px-4 border-r self-start"
+          style={{ borderColor: 'var(--border)' }}>
+          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Lemma</span>
+          <span className={`text-3xl font-bold ${textClass}`} style={{ color: 'var(--primary)' }}>
+            {lemma}
+          </span>
+        </div>
+
+        {/* Modifiers / verse instances column (scrollable) */}
+        <div className="flex-1 min-w-0 flex flex-col gap-2 pl-4 max-h-[600px] overflow-y-auto pr-2">
+          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Modifies / Connects to</span>
+          {entries.map(e => {
+            const saving = savingWordIds.has(e.word_id);
+            const value = inputs[e.word_id] ?? '';
+            const original = e.modifier || '';
+            const dirty = value !== original;
+            return (
+              <div key={e.word_id} className="flex items-center gap-2">
+                <span className="text-[var(--muted)]" aria-hidden>→</span>
+                <input
+                  type="text"
+                  value={value}
+                  placeholder="modifies / connects to…"
+                  onChange={ev => setInputs(prev => ({ ...prev, [e.word_id]: ev.target.value }))}
+                  onBlur={() => { if (dirty) onSave(e.word_id, value); }}
+                  onKeyDown={ev => { if (ev.key === 'Enter') { (ev.target as HTMLInputElement).blur(); } }}
+                  className="flex-1 min-w-0 px-2 py-1 border rounded text-sm"
+                  style={{
+                    backgroundColor: 'var(--background)',
+                    borderColor: dirty ? 'var(--accent)' : 'var(--border)',
+                  }}
+                />
+                <Link href={`/browse/${e.abbreviation.toLowerCase()}/${e.chapter}`}
+                  className="text-xs font-medium shrink-0 hover:underline"
+                  style={{ color: 'var(--primary)' }}>
+                  {e.book_name} {e.chapter}:{e.verse}
+                </Link>
+                {saving && (
+                  <span className="text-[10px]" style={{ color: 'var(--muted)' }}>saving…</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

@@ -169,6 +169,16 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_wa_lemma ON word_annotations(lemma);
     CREATE INDEX IF NOT EXISTS idx_wa_strongs ON word_annotations(strongs);
 
+    CREATE TABLE IF NOT EXISTS lemma_equations (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      word_id     INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+      modifier    TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(word_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lemma_eq_word ON lemma_equations(word_id);
+
     -- Word search indexes (lemma is always present)
     CREATE INDEX IF NOT EXISTS idx_words_lemma ON words(lemma);
   `);
