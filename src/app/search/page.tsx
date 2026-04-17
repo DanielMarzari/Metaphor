@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Plus, X, Network } from 'lucide-react';
+import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Plus, X, Network, Sigma } from 'lucide-react';
 import { decodeMorph } from '@/lib/morph-decoder';
 
 interface WordAnnotation {
@@ -83,6 +83,11 @@ function SearchContent() {
   const [equationEntries, setEquationEntries] = useState<any[]>([]);
   const [equationInputs, setEquationInputs] = useState<Record<number, string>>({});
   const [savingWordIds, setSavingWordIds] = useState<Set<number>>(new Set());
+
+  // Solving equations state
+  const [solvingLemma, setSolvingLemma] = useState<string | null>(null);
+  const [solvingStrongs, setSolvingStrongs] = useState<string | null>(null);
+  const [solvingEntries, setSolvingEntries] = useState<any[]>([]);
 
   useEffect(() => {
     if (initialQ) doSearch(initialQ);
@@ -258,6 +263,16 @@ function SearchContent() {
     await fetch(`/api/word-annotations/${annotationId}`, { method: 'DELETE' });
     await loadWordAnnotations();
     closeAnnotationForm();
+  }
+
+  async function openSolving(lemma: string, language: string, strongs?: string) {
+    // Reuse equation entries so the dropdowns can reference verses/prefixes
+    const param = strongs ? `strongs=${encodeURIComponent(strongs)}` : `lemma=${encodeURIComponent(lemma)}&language=${language}`;
+    const res = await fetch(`/api/lemma-equations?${param}`);
+    const data: any[] = await res.json();
+    setSolvingEntries(data);
+    setSolvingStrongs(strongs || lemma);
+    setSolvingLemma(lemma);
   }
 
   async function toggleEquations(lemma: string, language: string, strongs?: string) {
@@ -452,6 +467,12 @@ function SearchContent() {
                             }}
                             title="Equations">
                             <Network className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => openSolving(w.lemma, w.language, w.strongs)}
+                            className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
+                            style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
+                            title="Solving Equations">
+                            <Sigma className="w-3.5 h-3.5" />
                           </button>
                           <button onClick={() => expandLemma(w.lemma, w.language, w.strongs)}
                             className="p-1.5 rounded-lg border hover:shadow-sm transition-all"
@@ -720,6 +741,21 @@ function SearchContent() {
           />
         );
       })()}
+
+      {/* Solving Equations modal */}
+      {solvingLemma && solvingStrongs && (() => {
+        const w = wordResults.find((r: any) => r.lemma === solvingLemma);
+        if (!w) return null;
+        return (
+          <SolvingEquationsModal
+            lemma={w.sample_text || w.lemma}
+            isHebrew={w.language === 'hebrew'}
+            strongs={solvingStrongs}
+            entries={solvingEntries}
+            onClose={() => { setSolvingLemma(null); setSolvingStrongs(null); setSolvingEntries([]); }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -741,6 +777,305 @@ interface EquationEntry {
 // Strip Hebrew vowel points and cantillation (U+0591–U+05C7) so בְּ, בָּ, בַּ → ב
 function stripNiqqud(text: string): string {
   return (text || '').normalize('NFKD').replace(/[\u0591-\u05C7]/g, '');
+}
+
+function SolvingEquationsModal({
+  lemma, isHebrew, strongs, entries, onClose,
+}: {
+  lemma: string;
+  isHebrew: boolean;
+  strongs: string;
+  entries: EquationEntry[];
+  onClose: () => void;
+}) {
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [trigger, setTrigger] = useState<null | {
+    type: 'verse' | 'prefix';
+    query: string;
+    pos: { top: number; left: number };
+  }>(null);
+  const [suggestIndex, setSuggestIndex] = useState(0);
+
+  // De-duped verse list (label → unique)
+  const verseList = (() => {
+    const seen = new Set<string>();
+    const out: { label: string; abbreviation: string; chapter: number; verse: number }[] = [];
+    for (const e of entries) {
+      const label = `${e.abbreviation} ${e.chapter}:${e.verse}`;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      out.push({ label, abbreviation: e.abbreviation, chapter: e.chapter, verse: e.verse });
+    }
+    return out;
+  })();
+
+  // De-duped prefix list (consonantal)
+  const prefixList = (() => {
+    const map = new Map<string, number>();
+    for (const e of entries) {
+      for (const p of e.prefixes) {
+        const key = stripNiqqud(p.text || p.lemma || '');
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + 1);
+      }
+    }
+    return Array.from(map.entries()).map(([text, count]) => ({ text, count })).sort((a, b) => b.count - a.count);
+  })();
+
+  // Load saved content
+  useEffect(() => {
+    fetch(`/api/lemma-solutions?strongs=${encodeURIComponent(strongs)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (editorRef.current) editorRef.current.innerHTML = data?.content || '';
+      })
+      .finally(() => setLoading(false));
+  }, [strongs]);
+
+  // Close on Escape (but not while a dropdown is open — that handles Escape itself)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !trigger) onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, trigger]);
+
+  async function save() {
+    if (!editorRef.current) return;
+    setSaving(true);
+    try {
+      await fetch('/api/lemma-solutions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strongs, content: editorRef.current.innerHTML }),
+      });
+    } finally { setSaving(false); }
+  }
+
+  // Debounced autosave: save 1.5s after the last edit
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function scheduleSave() {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(save, 1500);
+  }
+  useEffect(() => () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); }, []);
+
+  // Insert a styled token at the current caret, optionally deleting `deleteChars` chars before it
+  function insertToken(kind: 'verse' | 'prefix' | 'lemma', label: string, deleteChars: number) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (deleteChars > 0 && range.endContainer.nodeType === Node.TEXT_NODE) {
+      const startOffset = Math.max(0, range.endOffset - deleteChars);
+      range.setStart(range.endContainer, startOffset);
+      range.deleteContents();
+    }
+    const span = document.createElement('span');
+    span.setAttribute('data-token', kind);
+    span.setAttribute('contenteditable', 'false');
+    span.style.cssText =
+      'display:inline-block;padding:1px 6px;margin:0 2px;border-radius:4px;' +
+      'background-color:color-mix(in srgb, var(--primary) 18%, transparent);' +
+      'color:var(--primary);font-weight:500;user-select:all;';
+    if (isHebrew && kind !== 'verse') span.className = 'hebrew-text';
+    span.textContent = label;
+    range.insertNode(span);
+    // Trailing space so caret sits outside the token
+    const spaceNode = document.createTextNode('\u00A0');
+    span.after(spaceNode);
+    range.setStartAfter(spaceNode);
+    range.setEndAfter(spaceNode);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    // Focus the editor if it was lost (e.g. after clicking dropdown)
+    editorRef.current?.focus();
+    scheduleSave();
+  }
+
+  const suggestions: { key: string; label: string }[] = trigger
+    ? trigger.type === 'verse'
+      ? verseList
+          .filter(v => trigger.query === '' || v.label.toLowerCase().includes(trigger.query.toLowerCase()))
+          .slice(0, 10)
+          .map(v => ({ key: 'v-' + v.label, label: v.label }))
+      : prefixList
+          .filter(p => trigger.query === '' || p.text.includes(trigger.query))
+          .slice(0, 10)
+          .map(p => ({ key: 'p-' + p.text, label: p.text + (p.count > 1 ? ` (×${p.count})` : '') }))
+    : [];
+
+  function selectSuggestion(idx: number) {
+    if (!trigger) return;
+    const s = suggestions[idx];
+    if (!s) return;
+    const deleteChars = 1 + trigger.query.length;
+    const label = trigger.type === 'verse'
+      ? verseList.find(v => 'v-' + v.label === s.key)?.label || s.label
+      : prefixList.find(p => 'p-' + p.text === s.key)?.text || s.label;
+    insertToken(trigger.type, label, deleteChars);
+    setTrigger(null);
+    setSuggestIndex(0);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (trigger) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSuggestIndex(i => Math.min(i + 1, Math.max(0, suggestions.length - 1))); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSuggestIndex(i => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Enter') { e.preventDefault(); selectSuggestion(suggestIndex); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setTrigger(null); return; }
+    }
+    // Instant ^ replacement
+    if (e.key === '^') {
+      e.preventDefault();
+      insertToken('lemma', lemma, 0);
+    }
+  }
+
+  function onInput() {
+    scheduleSave();
+    // Check for *** → ∴
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    const container = range.endContainer;
+    if (container.nodeType === Node.TEXT_NODE) {
+      const text = container.textContent || '';
+      const offset = range.endOffset;
+      // *** replacement
+      if (offset >= 3 && text.slice(offset - 3, offset) === '***') {
+        const r = document.createRange();
+        r.setStart(container, offset - 3);
+        r.setEnd(container, offset);
+        r.deleteContents();
+        const therefore = document.createTextNode('∴ ');
+        r.insertNode(therefore);
+        r.setStartAfter(therefore);
+        r.setEndAfter(therefore);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        setTrigger(null);
+        return;
+      }
+    }
+
+    // Trigger detection / query update
+    if (container.nodeType === Node.TEXT_NODE) {
+      const text = container.textContent || '';
+      const offset = range.endOffset;
+      // Find the last unescaped / or \ before caret
+      let triggerIdx = -1;
+      let triggerType: 'verse' | 'prefix' | null = null;
+      for (let i = offset - 1; i >= 0; i--) {
+        const c = text[i];
+        if (c === '/' || c === '\\') {
+          triggerIdx = i;
+          triggerType = c === '/' ? 'verse' : 'prefix';
+          break;
+        }
+        if (c === ' ' || c === '\n' || c === '\t') break;
+      }
+      if (triggerIdx !== -1 && triggerType) {
+        const query = text.slice(triggerIdx + 1, offset);
+        const r = document.createRange();
+        r.setStart(container, triggerIdx);
+        r.setEnd(container, triggerIdx + 1);
+        const rect = r.getBoundingClientRect();
+        setTrigger({
+          type: triggerType,
+          query,
+          pos: { top: rect.bottom + 4, left: rect.left },
+        });
+        setSuggestIndex(0);
+        return;
+      }
+    }
+    setTrigger(null);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+      onClick={e => { if (e.target === e.currentTarget) { save(); onClose(); } }}>
+      <div className="w-full max-w-4xl max-h-[90vh] flex flex-col rounded-xl border shadow-2xl"
+        style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-2">
+            <Sigma className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>
+              Solving Equations
+            </span>
+            <span className={`text-lg ml-2 ${isHebrew ? 'hebrew-text' : 'greek-text'}`} style={{ color: 'var(--primary)' }}>
+              {lemma}
+            </span>
+            {saving && <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>saving…</span>}
+          </div>
+          <button onClick={() => { save(); onClose(); }} className="p-1 rounded hover:opacity-70" style={{ color: 'var(--muted)' }}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Hint */}
+        <div className="px-5 py-2 text-xs border-b flex gap-4 flex-wrap"
+          style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
+          <span><kbd className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border)' }}>/</kbd> verse</span>
+          <span><kbd className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border)' }}>\</kbd> prefix</span>
+          <span><kbd className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border)' }}>^</kbd> lemma</span>
+          <span><kbd className="px-1.5 py-0.5 rounded border" style={{ borderColor: 'var(--border)' }}>***</kbd> ∴</span>
+        </div>
+
+        {/* Editor */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading…</p>
+          ) : (
+            <div
+              ref={editorRef}
+              contentEditable
+              suppressContentEditableWarning
+              onKeyDown={onKeyDown}
+              onInput={onInput}
+              onBlur={save}
+              className="min-h-[300px] outline-none text-[15px] leading-relaxed"
+              style={{ color: 'var(--foreground)' }}
+            />
+          )}
+        </div>
+
+        {/* Suggestion dropdown */}
+        {trigger && suggestions.length > 0 && (
+          <div
+            className="fixed z-50 rounded-lg border shadow-lg overflow-hidden"
+            style={{
+              top: trigger.pos.top,
+              left: trigger.pos.left,
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+              minWidth: '180px',
+            }}
+            onMouseDown={e => e.preventDefault() /* prevent blur */}>
+            {suggestions.map((s, i) => (
+              <div
+                key={s.key}
+                onMouseDown={e => { e.preventDefault(); selectSuggestion(i); }}
+                onMouseEnter={() => setSuggestIndex(i)}
+                className="px-3 py-1.5 text-sm cursor-pointer"
+                style={{
+                  backgroundColor: i === suggestIndex ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'transparent',
+                  color: i === suggestIndex ? 'var(--primary)' : 'var(--foreground)',
+                }}>
+                {s.label}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function EquationsModal({
@@ -923,9 +1258,15 @@ function EquationsModal({
                   const dirty = value !== original;
                   return (
                     <div key={e.word_id}
-                      ref={el => { modifierRefs.current.set(e.word_id, el); }}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border"
+                      className="flex items-center gap-3 px-3 py-1.5 rounded-lg border"
                       style={{ backgroundColor: 'var(--background)', borderColor: dirty ? 'var(--accent)' : 'var(--border)' }}>
+                      <Link
+                        ref={el => { modifierRefs.current.set(e.word_id, el as any); }}
+                        href={`/browse/${e.abbreviation.toLowerCase()}/${e.chapter}`}
+                        className="text-xs font-semibold shrink-0 hover:underline whitespace-nowrap"
+                        style={{ color: 'var(--primary)', minWidth: '85px' }}>
+                        {e.abbreviation} {e.chapter}:{e.verse}
+                      </Link>
                       <input
                         type="text"
                         value={value}
@@ -936,11 +1277,6 @@ function EquationsModal({
                         className="flex-1 min-w-0 px-2 py-1 border rounded text-sm bg-transparent"
                         style={{ borderColor: 'transparent' }}
                       />
-                      <Link href={`/browse/${e.abbreviation.toLowerCase()}/${e.chapter}`}
-                        className="text-xs font-medium shrink-0 hover:underline"
-                        style={{ color: 'var(--primary)' }}>
-                        {e.book_name} {e.chapter}:{e.verse}
-                      </Link>
                       {saving && (
                         <span className="text-[10px]" style={{ color: 'var(--muted)' }}>saving…</span>
                       )}

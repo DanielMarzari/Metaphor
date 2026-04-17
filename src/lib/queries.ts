@@ -907,6 +907,20 @@ export function getLemmaEquationEntries(
   });
 }
 
+export function getLemmaSolution(strongs: string) {
+  const db = ensureSchema();
+  return db.prepare('SELECT strongs, content FROM lemma_solutions WHERE strongs = ?').get(strongs) || { strongs, content: '' };
+}
+
+export function upsertLemmaSolution(strongs: string, content: string | null) {
+  const db = ensureSchema();
+  db.prepare(
+    `INSERT INTO lemma_solutions (strongs, content) VALUES (?, ?)
+     ON CONFLICT(strongs) DO UPDATE SET content = excluded.content, updated_at = datetime('now')`
+  ).run(strongs, content || '');
+  return { strongs, content: content || '' };
+}
+
 export function upsertLemmaEquation(word_id: number, modifier: string | null) {
   const db = ensureSchema();
   const trimmed = (modifier || '').trim();
