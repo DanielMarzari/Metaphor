@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Search, ChevronLeft, ChevronDown, ChevronRight, Tag, BookOpen, Hash, Edit2, Save, Trash2, Plus, X, Network } from 'lucide-react';
@@ -688,18 +688,6 @@ function SearchContent() {
                     </div>
                   )}
 
-                  {/* Expanded: equations diagram */}
-                  {equationsLemma === w.lemma && (
-                    <EquationsDiagram
-                      lemma={w.sample_text || w.lemma}
-                      isHebrew={isHebrew}
-                      entries={equationEntries}
-                      inputs={equationInputs}
-                      setInputs={setEquationInputs}
-                      savingWordIds={savingWordIds}
-                      onSave={saveEquationEntry}
-                    />
-                  )}
                 </div>
                 );
               })}
@@ -714,6 +702,24 @@ function SearchContent() {
           <p className="text-center py-12" style={{ color: 'var(--muted)' }}>No word matches found for &quot;{query}&quot;</p>
         )}
       </main>
+
+      {/* Equations modal */}
+      {equationsLemma && (() => {
+        const w = wordResults.find((r: any) => r.lemma === equationsLemma);
+        if (!w) return null;
+        return (
+          <EquationsModal
+            lemma={w.sample_text || w.lemma}
+            isHebrew={w.language === 'hebrew'}
+            entries={equationEntries}
+            inputs={equationInputs}
+            setInputs={setEquationInputs}
+            savingWordIds={savingWordIds}
+            onSave={saveEquationEntry}
+            onClose={() => { setEquationsLemma(null); setEquationEntries([]); setEquationInputs({}); }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -732,8 +738,13 @@ interface EquationEntry {
   modifier: string;
 }
 
-function EquationsDiagram({
-  lemma, isHebrew, entries, inputs, setInputs, savingWordIds, onSave,
+// Strip Hebrew vowel points and cantillation (U+0591–U+05C7) so בְּ, בָּ, בַּ → ב
+function stripNiqqud(text: string): string {
+  return (text || '').normalize('NFKD').replace(/[\u0591-\u05C7]/g, '');
+}
+
+function EquationsModal({
+  lemma, isHebrew, entries, inputs, setInputs, savingWordIds, onSave, onClose,
 }: {
   lemma: string;
   isHebrew: boolean;
@@ -742,105 +753,204 @@ function EquationsDiagram({
   setInputs: React.Dispatch<React.SetStateAction<Record<number, string>>>;
   savingWordIds: Set<number>;
   onSave: (word_id: number, modifier: string) => Promise<void>;
+  onClose: () => void;
 }) {
-  if (entries.length === 0) {
-    return (
-      <div className="ml-4 mt-1 mb-2 p-4 rounded-lg border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>No occurrences found for this lemma.</p>
-      </div>
-    );
-  }
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const prefixRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const modifierRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const lemmaRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [lines, setLines] = useState<{ key: string; d: string; kind: 'prefix' | 'modifier' }[]>([]);
 
-  // Aggregate unique prefix texts across all entries (de-duped by text)
-  const uniquePrefixes = new Map<string, { text: string; lemma: string; count: number }>();
-  for (const e of entries) {
-    for (const p of e.prefixes) {
-      const key = p.text || p.lemma;
-      const existing = uniquePrefixes.get(key);
-      if (existing) existing.count++;
-      else uniquePrefixes.set(key, { text: p.text, lemma: p.lemma, count: 1 });
+  // Close on Escape
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Aggregate prefixes by their consonantal (vowel-less) form
+  const prefixList = (() => {
+    const map = new Map<string, { text: string; count: number }>();
+    for (const e of entries) {
+      for (const p of e.prefixes) {
+        const raw = p.text || p.lemma || '';
+        const key = stripNiqqud(raw);
+        if (!key) continue;
+        const existing = map.get(key);
+        if (existing) existing.count++;
+        else map.set(key, { text: key, count: 1 });
+      }
     }
-  }
-  const prefixList = Array.from(uniquePrefixes.values());
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  })();
+
+  const recomputeLines = useCallback(() => {
+    const body = bodyRef.current;
+    const scroll = scrollRef.current;
+    const lemmaEl = lemmaRef.current;
+    if (!body || !lemmaEl) return;
+    const bRect = body.getBoundingClientRect();
+    const sRect = scroll ? scroll.getBoundingClientRect() : bRect;
+    const lRect = lemmaEl.getBoundingClientRect();
+    const lemmaLeft = { x: lRect.left - bRect.left, y: lRect.top + lRect.height / 2 - bRect.top };
+    const lemmaRight = { x: lRect.right - bRect.left, y: lRect.top + lRect.height / 2 - bRect.top };
+
+    const next: { key: string; d: string; kind: 'prefix' | 'modifier' }[] = [];
+
+    prefixRefs.current.forEach((el, key) => {
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const x1 = r.right - bRect.left;
+      const y1 = r.top + r.height / 2 - bRect.top;
+      const x2 = lemmaLeft.x;
+      const y2 = lemmaLeft.y;
+      const cx = (x1 + x2) / 2;
+      next.push({ key: 'p-' + key, kind: 'prefix', d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}` });
+    });
+
+    modifierRefs.current.forEach((el, id) => {
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      // Only draw if within visible vertical range of the scrollable modifiers area
+      if (r.bottom < sRect.top - 10 || r.top > sRect.bottom + 10) return;
+      const x1 = lemmaRight.x;
+      const y1 = lemmaRight.y;
+      const x2 = r.left - bRect.left;
+      const y2 = r.top + r.height / 2 - bRect.top;
+      const cx = (x1 + x2) / 2;
+      next.push({ key: 'm-' + id, kind: 'modifier', d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}` });
+    });
+
+    setLines(next);
+  }, []);
+
+  useLayoutEffect(() => {
+    recomputeLines();
+    const ro = new ResizeObserver(recomputeLines);
+    if (bodyRef.current) ro.observe(bodyRef.current);
+    window.addEventListener('resize', recomputeLines);
+    return () => { ro.disconnect(); window.removeEventListener('resize', recomputeLines); };
+  }, [recomputeLines, entries, prefixList.length]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', recomputeLines, { passive: true });
+    return () => el.removeEventListener('scroll', recomputeLines);
+  }, [recomputeLines]);
 
   const textClass = isHebrew ? 'hebrew-text' : 'greek-text';
 
   return (
-    <div className="mt-2 mb-2 p-5 rounded-lg border" style={{ borderColor: 'var(--accent)', backgroundColor: 'var(--surface)' }}>
-      <div className="flex items-center gap-2 mb-4">
-        <Network className="w-4 h-4" style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>
-          Equations · {entries.length} occurrence{entries.length === 1 ? '' : 's'}
-        </span>
-      </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="w-full max-w-6xl max-h-[90vh] flex flex-col rounded-xl border shadow-2xl"
+        style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
 
-      <div className="flex items-start gap-4" style={{ alignItems: 'flex-start' }}>
-        {/* Prefixes column (sticky) */}
-        <div className="sticky top-4 flex flex-col gap-2 pr-4 border-r self-start"
-          style={{ borderColor: 'var(--border)', minWidth: '80px' }}>
-          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Prefixes</span>
-          {prefixList.length === 0 ? (
-            <span className="text-xs italic" style={{ color: 'var(--muted)' }}>(none)</span>
-          ) : (
-            prefixList.map((p, i) => (
-              <div key={i} className="flex items-center gap-2 justify-end">
-                <span className={`text-xl font-semibold ${textClass}`}>{p.text}</span>
-                {p.count > 1 && (
-                  <span className="text-[10px] px-1 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
-                    ×{p.count}
-                  </span>
-                )}
-                <span className="text-[var(--muted)]" aria-hidden>→</span>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-2">
+            <Network className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>
+              Equations
+            </span>
+            <span className="text-sm ml-2" style={{ color: 'var(--muted)' }}>
+              {entries.length} occurrence{entries.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:opacity-70" style={{ color: 'var(--muted)' }}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        {entries.length === 0 ? (
+          <div className="p-6 text-sm" style={{ color: 'var(--muted)' }}>No occurrences found.</div>
+        ) : (
+          <div ref={bodyRef} className="relative flex-1 flex min-h-0">
+            {/* SVG line overlay — spans the whole modal body */}
+            <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" style={{ overflow: 'visible' }}>
+              {lines.map(l => (
+                <path key={l.key} d={l.d}
+                  stroke="currentColor" fill="none" strokeWidth={1.5}
+                  style={{ color: 'var(--accent)', opacity: 0.6 }} />
+              ))}
+            </svg>
+
+            {/* Prefixes column (fixed, vertically centered) */}
+            <div className="flex flex-col gap-3 justify-center items-end p-6 min-w-[110px]">
+              <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Prefixes</div>
+              {prefixList.length === 0 ? (
+                <div className="text-xs italic" style={{ color: 'var(--muted)' }}>(none)</div>
+              ) : (
+                prefixList.map(p => (
+                  <div key={p.text}
+                    ref={el => { prefixRefs.current.set(p.text, el); }}
+                    className="flex items-center gap-2 justify-end px-3 py-1.5 rounded-lg border"
+                    style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}>
+                    <span className={`text-2xl font-semibold ${textClass}`}>{p.text}</span>
+                    {p.count > 1 && (
+                      <span className="text-[10px] px-1 rounded" style={{ backgroundColor: 'var(--surface-2)', color: 'var(--muted)' }}>
+                        ×{p.count}
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Lemma (trunk) */}
+            <div className="flex items-center justify-center px-6">
+              <div ref={lemmaRef}
+                className="px-5 py-4 rounded-xl border-2"
+                style={{ backgroundColor: 'var(--background)', borderColor: 'var(--primary)' }}>
+                <span className={`text-3xl font-bold ${textClass}`} style={{ color: 'var(--primary)' }}>
+                  {lemma}
+                </span>
               </div>
-            ))
-          )}
-        </div>
+            </div>
 
-        {/* Lemma column (sticky) */}
-        <div className="sticky top-4 flex flex-col items-center px-4 border-r self-start"
-          style={{ borderColor: 'var(--border)' }}>
-          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Lemma</span>
-          <span className={`text-3xl font-bold ${textClass}`} style={{ color: 'var(--primary)' }}>
-            {lemma}
-          </span>
-        </div>
-
-        {/* Modifiers / verse instances column (scrollable) */}
-        <div className="flex-1 min-w-0 flex flex-col gap-2 pl-4 max-h-[600px] overflow-y-auto pr-2">
-          <span className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>Modifies / Connects to</span>
-          {entries.map(e => {
-            const saving = savingWordIds.has(e.word_id);
-            const value = inputs[e.word_id] ?? '';
-            const original = e.modifier || '';
-            const dirty = value !== original;
-            return (
-              <div key={e.word_id} className="flex items-center gap-2">
-                <span className="text-[var(--muted)]" aria-hidden>→</span>
-                <input
-                  type="text"
-                  value={value}
-                  placeholder="modifies / connects to…"
-                  onChange={ev => setInputs(prev => ({ ...prev, [e.word_id]: ev.target.value }))}
-                  onBlur={() => { if (dirty) onSave(e.word_id, value); }}
-                  onKeyDown={ev => { if (ev.key === 'Enter') { (ev.target as HTMLInputElement).blur(); } }}
-                  className="flex-1 min-w-0 px-2 py-1 border rounded text-sm"
-                  style={{
-                    backgroundColor: 'var(--background)',
-                    borderColor: dirty ? 'var(--accent)' : 'var(--border)',
-                  }}
-                />
-                <Link href={`/browse/${e.abbreviation.toLowerCase()}/${e.chapter}`}
-                  className="text-xs font-medium shrink-0 hover:underline"
-                  style={{ color: 'var(--primary)' }}>
-                  {e.book_name} {e.chapter}:{e.verse}
-                </Link>
-                {saving && (
-                  <span className="text-[10px]" style={{ color: 'var(--muted)' }}>saving…</span>
-                )}
+            {/* Modifiers (branches) — scrollable */}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-6">
+              <div className="text-[10px] uppercase tracking-wider mb-3" style={{ color: 'var(--muted)' }}>Modifies / Connects to</div>
+              <div className="flex flex-col gap-2">
+                {entries.map(e => {
+                  const saving = savingWordIds.has(e.word_id);
+                  const value = inputs[e.word_id] ?? '';
+                  const original = e.modifier || '';
+                  const dirty = value !== original;
+                  return (
+                    <div key={e.word_id}
+                      ref={el => { modifierRefs.current.set(e.word_id, el); }}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border"
+                      style={{ backgroundColor: 'var(--background)', borderColor: dirty ? 'var(--accent)' : 'var(--border)' }}>
+                      <input
+                        type="text"
+                        value={value}
+                        placeholder="modifies / connects to…"
+                        onChange={ev => setInputs(prev => ({ ...prev, [e.word_id]: ev.target.value }))}
+                        onBlur={() => { if (dirty) onSave(e.word_id, value); }}
+                        onKeyDown={ev => { if (ev.key === 'Enter') { (ev.target as HTMLInputElement).blur(); } }}
+                        className="flex-1 min-w-0 px-2 py-1 border rounded text-sm bg-transparent"
+                        style={{ borderColor: 'transparent' }}
+                      />
+                      <Link href={`/browse/${e.abbreviation.toLowerCase()}/${e.chapter}`}
+                        className="text-xs font-medium shrink-0 hover:underline"
+                        style={{ color: 'var(--primary)' }}>
+                        {e.book_name} {e.chapter}:{e.verse}
+                      </Link>
+                      {saving && (
+                        <span className="text-[10px]" style={{ color: 'var(--muted)' }}>saving…</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
